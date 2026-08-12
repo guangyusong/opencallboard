@@ -275,7 +275,7 @@ export function LandingScreen() {
               <div className="landing-video-heading"><span>OpenCallboard in 90 seconds</span><small>Real browser interaction with a concise narrated tour</small></div>
               <div className="landing-video-controls"><button ref={closeButtonRef} type="button" onClick={() => setVideoOpen(false)} aria-label="Close video"><X size={20} /></button></div>
             </div>
-            <video controls autoPlay playsInline poster="/landing/organizer-dashboard.webp"><source src="/landing/opencallboard-demo.mp4" type="video/mp4" /></video>
+            <video controls autoPlay playsInline poster="/landing/organizer-dashboard.webp"><source src="/landing/opencallboard-demo.mp4?v=20260812-natural" type="video/mp4" /></video>
           </section>
         </div>
       )}
