@@ -79,6 +79,15 @@ const operations = [
   "Deadline reminders and decision communications",
 ];
 
+const extras = [
+  [Send, "Real communications", "Gmail-backed decision and reminder delivery, plus RFC 5545 calendar invitations with room and session details."],
+  [FileUp, "Object-backed speaker files", "Role-scoped R2 uploads, version history, downloads, and sanitized public headshot delivery."],
+  [Database, "Optional speaker CRM", "A cross-event directory with segments, pipeline stages, notes, bulk communication, and relationship analytics."],
+  [Cloud, "Airtable-ready operations", "A one-way sync plan with exact diffs, stable idempotency keys, and an explicit approval gate before external writes."],
+  [Globe2, "Five public embeds", "Sessions, agenda, itinerary, speaker list, and speaker gallery views designed for anonymous, mobile-friendly use."],
+  [Code2, "API and operational controls", "OpenAPI-documented endpoints, scoped tokens, D1 shared state, Queue-backed jobs, and observable delivery logs."],
+];
+
 const WALKTHROUGH_AVAILABLE = true;
 
 function Brand() {
@@ -242,6 +251,22 @@ export function LandingScreen() {
           <article><Cloud size={20} /><h3>Private objects</h3><p>Speaker headshots and presentation files use private, role-scoped R2 access.</p></article>
           <article><Globe2 size={20} /><h3>Public output</h3><p>Fast agenda and speaker embeds publish only accepted, released program data.</p></article>
           <article><Code2 size={20} /><h3>Useful API</h3><p>OpenAPI-documented endpoints support practical integrations without recreating the app.</p></article>
+        </div>
+      </section>
+
+      <section className="landing-extras" aria-labelledby="landing-extras-title">
+        <div className="landing-extras-heading">
+          <div className="landing-kicker">Production extras</div>
+          <h2 id="landing-extras-title">Depth beyond the happy path.</h2>
+          <p>The core workflow is the product. These additional capabilities make it practical to operate, integrate, and keep.</p>
+        </div>
+        <div className="landing-extras-list">
+          {extras.map(([Icon, title, body]) => (
+            <article key={title}>
+              <Icon size={19} />
+              <div><h3>{title}</h3><p>{body}</p></div>
+            </article>
+          ))}
         </div>
       </section>
 
