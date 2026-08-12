@@ -1,0 +1,22 @@
+name: Feature request
+description: Propose a Callboard workflow improvement
+title: "[Feature]: "
+body:
+  - type: textarea
+    attributes:
+      label: User problem
+      description: Explain who is blocked and what outcome they need.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Proposed workflow
+      description: Describe the organizer, reviewer, speaker, or attendee experience.
+    validations:
+      required: true
+  - type: checkboxes
+    attributes:
+      label: Safety boundary
+      options:
+        - label: This proposal identifies any external writes, credentials, or paid services.
+          required: true

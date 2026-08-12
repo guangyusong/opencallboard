@@ -1,0 +1,54 @@
+name = "opencallboard"
+main = "worker/index.js"
+compatibility_date = "2026-08-08"
+workers_dev = true
+preview_urls = true
+
+[assets]
+directory = "./dist/client"
+binding = "ASSETS"
+run_worker_first = true
+
+[vars]
+# Keep remote state writes disabled until the deployment owner explicitly enables them.
+CALLBOARD_WRITE_ENABLED = "false"
+
+# Optional D1 binding. Create the database, apply schema.sql, then uncomment this
+# block and replace the placeholder. No database has been created by this repo.
+# [[d1_databases]]
+# binding = "CALLBOARD_DB"
+# database_name = "callboard"
+# database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# Direct preview deployments use an isolated workers.dev Worker. This named
+# environment intentionally has no D1, R2, KV, Durable Object, Queue, route, or
+# custom-domain binding. State therefore remains in each browser's localStorage.
+[env.preview]
+name = "opencallboard-preview"
+workers_dev = true
+preview_urls = true
+routes = []
+
+[env.preview.vars]
+CALLBOARD_WRITE_ENABLED = "false"
+
+# Optional shared-state deployment template. Provision dedicated D1, R2, and
+# Queue resources, replace the D1 placeholder, and review every enable flag
+# before deploying this environment. No account ID, zone, route, provider
+# credential, or production destination is committed here.
+[env.shared]
+name = "opencallboard"
+workers_dev = true
+preview_urls = true
+routes = []
+
+# Add reviewed D1, R2, and Queue bindings here only after provisioning them in
+# the selected Cloudflare account. The checked-in shared environment has no
+# resource identifiers and cannot create or attach resources implicitly.
+
+[env.shared.vars]
+CALLBOARD_WRITE_ENABLED = "false"
+CALLBOARD_EMAIL_RELEASE_ENABLED = "false"
+CALLBOARD_EMAIL_UI_RELEASE_ENABLED = "false"
+CALLBOARD_DEMO_RESET_ENABLED = "false"
+AIRTABLE_REAL_SYNC_ENABLED = "false"

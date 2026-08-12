@@ -1,0 +1,581 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OpenCallboard API",
+    "version": "0.18.0",
+    "description": "Event-scoped API for OpenCallboard. Browser sessions use a Secure HttpOnly cookie; API clients use expiring, event-scoped bearer tokens whose plaintext is returned once and whose explicit read/write scopes are enforced per route. Collection endpoints support stable keyset cursors. Lifecycle writes append webhook events, while signed delivery and retry records are strictly mock-only. Scheduled reminders can materialize durable zero-network preview records without sending them. Gmail delivery remains fail-closed unless its queue, encrypted credentials, enable flag, exact payload hash, one-time approval, and operator key all agree. Public CFP writes require idempotency keys; versioned mutations require If-Match. Email delivery, external webhooks, calendar-provider writes, real Accelevents transport, and unbound object storage are never represented as completed provider operations."
+  },
+  "servers": [
+    {
+      "url": "https://opencallboard.com",
+      "description": "OpenCallboard hosted demo"
+    }
+  ],
+  "tags": [
+    { "name": "Service" },
+    { "name": "Access" },
+    { "name": "Forms" },
+    { "name": "Program" },
+    { "name": "Evaluation" },
+    { "name": "Portal" },
+    { "name": "Communications" },
+    { "name": "Webhooks" },
+    { "name": "Integrations" },
+    { "name": "Public" }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": ["Service"],
+        "summary": "Read non-sensitive runtime capabilities",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Runtime capability summary",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } }
+          }
+        }
+      }
+    },
+    "/api/session": {
+      "get": {
+        "tags": ["Access"],
+        "summary": "Read the current event-scoped session",
+        "responses": { "200": { "$ref": "#/components/responses/Session" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+      },
+      "post": {
+        "tags": ["Access"],
+        "summary": "Redeem a one-time speaker or reviewer grant",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["grantToken"], "properties": { "grantToken": { "type": "string" } } } } }
+        },
+        "responses": { "201": { "$ref": "#/components/responses/Session" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+      },
+      "delete": {
+        "tags": ["Access"],
+        "summary": "Revoke the current session",
+        "responses": { "204": { "description": "Session revoked" } }
+      }
+    },
+    "/api/access-grants": {
+      "post": {
+        "tags": ["Access"],
+        "summary": "Create an organizer-only one-time role link",
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "201": { "description": "Plaintext grant returned once; only its hash is stored" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/api-tokens": {
+      "get": {
+        "tags": ["Access"],
+        "summary": "List organizer-created API token metadata",
+        "description": "Requires an organizer browser session. Plaintext tokens and hashes are never returned by this operation.",
+        "security": [{ "sessionCookie": [] }],
+        "responses": { "200": { "$ref": "#/components/responses/ApiTokenList" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      },
+      "post": {
+        "tags": ["Access"],
+        "summary": "Issue one expiring, event-scoped API token",
+        "description": "Requires an organizer browser session. The plaintext cbp_ token is returned exactly once; only its SHA-256 hash and non-secret prefix are stored.",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": { "$ref": "#/components/requestBodies/ApiTokenCreate" },
+        "responses": { "201": { "description": "Token metadata and one-time plaintext token" }, "400": { "description": "Invalid scope or expiry" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/api-tokens/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "delete": {
+        "tags": ["Access"],
+        "summary": "Revoke an API token",
+        "security": [{ "sessionCookie": [] }],
+        "responses": { "204": { "description": "Token revoked" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/event": {
+      "get": {
+        "tags": ["Program"],
+        "summary": "Read the authenticated event",
+        "responses": { "200": { "$ref": "#/components/responses/Item" } }
+      },
+      "patch": {
+        "tags": ["Program"],
+        "summary": "Version-update event settings",
+        "parameters": [{ "$ref": "#/components/parameters/IfMatch" }],
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "200": { "$ref": "#/components/responses/Item" }, "409": { "$ref": "#/components/responses/VersionConflict" } }
+      },
+      "put": {
+        "tags": ["Program"],
+        "summary": "Version-replace event settings",
+        "parameters": [{ "$ref": "#/components/parameters/IfMatch" }],
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "200": { "$ref": "#/components/responses/Item" }, "409": { "$ref": "#/components/responses/VersionConflict" } }
+      }
+    },
+    "/api/reviewers": {
+      "get": {
+        "tags": ["Evaluation"],
+        "summary": "List redeemed reviewer memberships",
+        "responses": { "200": { "$ref": "#/components/responses/ItemList" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/workspace-version": {
+      "get": {
+        "tags": ["Service"],
+        "summary": "Read the low-cost shared-workspace fingerprint",
+        "responses": { "200": { "description": "Fingerprint and recommended poll interval" } }
+      }
+    },
+    "/api/forms": {
+      "get": { "$ref": "#/components/x-operations/ListForms" },
+      "post": {
+        "tags": ["Forms"],
+        "summary": "Create a submission form",
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "201": { "$ref": "#/components/responses/Item" } }
+      }
+    },
+    "/api/forms/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "$ref": "#/components/x-operations/GetItem" },
+      "patch": { "$ref": "#/components/x-operations/UpdateItem" },
+      "delete": { "$ref": "#/components/x-operations/DeleteItem" }
+    },
+    "/api/public/forms/{formId}": {
+      "get": {
+        "tags": ["Public", "Forms"],
+        "summary": "Read a published public CFP form",
+        "security": [],
+        "parameters": [{ "$ref": "#/components/parameters/FormId" }],
+        "responses": { "200": { "description": "Sanitized public form and event identity" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/public/forms/{formId}/drafts": {
+      "post": {
+        "tags": ["Public", "Forms"],
+        "summary": "Create a capacity-counted CFP draft",
+        "security": [],
+        "parameters": [{ "$ref": "#/components/parameters/FormId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "201": { "description": "Draft plus one opaque 30-day resume token" }, "409": { "$ref": "#/components/responses/Conflict" } }
+      }
+    },
+    "/api/public/forms/{formId}/drafts/{resumeToken}": {
+      "parameters": [{ "$ref": "#/components/parameters/FormId" }, { "$ref": "#/components/parameters/ResumeToken" }],
+      "get": {
+        "tags": ["Public", "Forms"],
+        "summary": "Resume one active draft",
+        "security": [],
+        "responses": { "200": { "$ref": "#/components/responses/Item" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      },
+      "put": {
+        "tags": ["Public", "Forms"],
+        "summary": "Version-update one active draft",
+        "security": [],
+        "parameters": [{ "$ref": "#/components/parameters/IfMatch" }],
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "200": { "$ref": "#/components/responses/Item" }, "409": { "$ref": "#/components/responses/VersionConflict" } }
+      }
+    },
+    "/api/public/forms/{formId}/submissions": {
+      "post": {
+        "tags": ["Public", "Forms"],
+        "summary": "Atomically submit a proposal and participants",
+        "description": "The server enforces publication window, capacity, participant constraints, routing, and idempotency. A newly created primary event identity receives an event-scoped speaker session; an existing identity requires verified access.",
+        "security": [],
+        "parameters": [{ "$ref": "#/components/parameters/FormId" }, { "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "201": { "description": "Created submission and portal-access result" }, "200": { "description": "Idempotent replay of the original result" }, "409": { "$ref": "#/components/responses/Conflict" } }
+      }
+    },
+    "/api/submissions": {
+      "get": { "$ref": "#/components/x-operations/ListSubmissions" },
+      "post": {
+        "tags": ["Program"],
+        "summary": "Create an event-scoped submission",
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "201": { "$ref": "#/components/responses/Item" } }
+      }
+    },
+    "/api/submissions/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "$ref": "#/components/x-operations/GetItem" },
+      "patch": { "$ref": "#/components/x-operations/UpdateItem" },
+      "delete": { "$ref": "#/components/x-operations/DeleteItem" }
+    },
+    "/api/submissions/{id}/decision": {
+      "post": {
+        "tags": ["Program", "Evaluation"],
+        "summary": "Apply a versioned submission decision",
+        "description": "Accepting atomically promotes one linked agenda session, copies participants, and creates idempotent onboarding tasks/resources.",
+        "parameters": [{ "$ref": "#/components/parameters/Id" }, { "$ref": "#/components/parameters/IfMatch" }],
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "200": { "description": "Submission, decision, linked session, and onboarding rows" }, "409": { "$ref": "#/components/responses/VersionConflict" } }
+      }
+    },
+    "/api/people": {
+      "get": { "$ref": "#/components/x-operations/ListPeople" },
+      "post": { "$ref": "#/components/x-operations/CreateItem" }
+    },
+    "/api/people/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "$ref": "#/components/x-operations/GetItem" },
+      "patch": { "$ref": "#/components/x-operations/UpdateItem" }
+    },
+    "/api/evaluation-rounds": {
+      "get": { "$ref": "#/components/x-operations/ListEvaluationRounds" },
+      "post": { "$ref": "#/components/x-operations/CreateItem" }
+    },
+    "/api/evaluation-rounds/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "$ref": "#/components/x-operations/GetItem" },
+      "patch": { "$ref": "#/components/x-operations/UpdateItem" }
+    },
+    "/api/reviews": {
+      "get": { "$ref": "#/components/x-operations/ListReviews" },
+      "post": { "$ref": "#/components/x-operations/CreateItem" }
+    },
+    "/api/reviews/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "$ref": "#/components/x-operations/GetItem" },
+      "patch": { "$ref": "#/components/x-operations/UpdateItem" }
+    },
+    "/api/evaluation-decisions": {
+      "get": { "$ref": "#/components/x-operations/ListEvaluationDecisions" },
+      "post": { "$ref": "#/components/x-operations/CreateItem" }
+    },
+    "/api/sessions": {
+      "get": { "$ref": "#/components/x-operations/ListSessions" },
+      "post": { "$ref": "#/components/x-operations/CreateItem" }
+    },
+    "/api/sessions/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "$ref": "#/components/x-operations/GetItem" },
+      "patch": { "$ref": "#/components/x-operations/UpdateItem" },
+      "delete": { "$ref": "#/components/x-operations/DeleteItem" }
+    },
+    "/api/agenda-conflicts": {
+      "get": {
+        "tags": ["Program"],
+        "summary": "Derive room, participant, and track conflicts",
+        "responses": { "200": { "description": "Stable explainable conflict records" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/schedule-release": {
+      "get": { "tags": ["Program"], "summary": "Read the draft/published schedule release", "responses": { "200": { "$ref": "#/components/responses/Item" } } },
+      "put": {
+        "tags": ["Program"],
+        "summary": "Version-publish or withdraw the public schedule",
+        "parameters": [{ "$ref": "#/components/parameters/IfMatch" }],
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "200": { "$ref": "#/components/responses/Item" }, "409": { "$ref": "#/components/responses/VersionConflict" } }
+      }
+    },
+    "/api/tasks": {
+      "get": { "$ref": "#/components/x-operations/ListTasks" },
+      "post": { "$ref": "#/components/x-operations/CreateItem" }
+    },
+    "/api/tasks/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "$ref": "#/components/x-operations/GetItem" },
+      "patch": { "$ref": "#/components/x-operations/UpdateItem" },
+      "delete": { "$ref": "#/components/x-operations/DeleteItem" }
+    },
+    "/api/resources": {
+      "get": { "$ref": "#/components/x-operations/ListResources" },
+      "post": { "$ref": "#/components/x-operations/CreateItem" }
+    },
+    "/api/resources/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "$ref": "#/components/x-operations/GetItem" },
+      "patch": { "$ref": "#/components/x-operations/UpdateItem" },
+      "delete": { "$ref": "#/components/x-operations/DeleteItem" }
+    },
+    "/api/file-requests": {
+      "get": { "$ref": "#/components/x-operations/ListFileRequests" },
+      "post": { "$ref": "#/components/x-operations/CreateItem" }
+    },
+    "/api/files/upload": {
+      "post": {
+        "tags": ["Portal"],
+        "summary": "Upload one owner-scoped object",
+        "description": "Fails closed with OBJECT_STORAGE_NOT_CONFIGURED when CALLBOARD_FILES is unbound. Maximum declared and verified size is 10 MB.",
+        "parameters": [
+          { "name": "X-Callboard-File-Name", "in": "header", "required": true, "schema": { "type": "string" } },
+          { "name": "X-Callboard-File-Size", "in": "header", "required": true, "schema": { "type": "integer", "maximum": 10485760 } }
+        ],
+        "requestBody": { "required": true, "content": { "application/octet-stream": { "schema": { "type": "string", "contentEncoding": "binary" } } } },
+        "responses": { "201": { "$ref": "#/components/responses/Item" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      }
+    },
+    "/api/files/{id}/content": {
+      "get": {
+        "tags": ["Portal"],
+        "summary": "Read an owner- or organizer-authorized object",
+        "parameters": [{ "$ref": "#/components/parameters/Id" }],
+        "responses": { "200": { "description": "Private file bytes" }, "403": { "$ref": "#/components/responses/Forbidden" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      },
+      "head": {
+        "tags": ["Portal"],
+        "summary": "Read authorized object metadata without bytes",
+        "parameters": [{ "$ref": "#/components/parameters/Id" }],
+        "responses": { "200": { "description": "Private file metadata headers" }, "403": { "$ref": "#/components/responses/Forbidden" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      }
+    },
+    "/api/embeds": {
+      "get": { "$ref": "#/components/x-operations/ListEmbeds" },
+      "post": { "$ref": "#/components/x-operations/CreateItem" }
+    },
+    "/api/embeds/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "$ref": "#/components/x-operations/GetItem" },
+      "patch": { "$ref": "#/components/x-operations/UpdateItem" }
+    },
+    "/api/public/embeds/{id}": {
+      "get": {
+        "tags": ["Public"],
+        "summary": "Read a sanitized published speaker/schedule projection",
+        "security": [],
+        "parameters": [{ "$ref": "#/components/parameters/Id" }],
+        "responses": { "200": { "description": "Enabled embed plus released public event projection" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/communication-templates": {
+      "get": { "$ref": "#/components/x-operations/ListCommunicationTemplates" },
+      "post": { "$ref": "#/components/x-operations/CreateItem" }
+    },
+    "/api/communication-reminders": {
+      "get": { "$ref": "#/components/x-operations/ListCommunicationReminders" },
+      "post": { "$ref": "#/components/x-operations/CreateItem" }
+    },
+    "/api/communication-reminders/evaluate": {
+      "post": {
+        "tags": ["Communications"],
+        "summary": "Materialize currently due reminder previews",
+        "description": "Organizer-only and disabled unless reminder automation is explicitly enabled. Re-evaluates only the current event, persists idempotent scheduled_preview outbox rows plus durable zero-network run evidence, and never enqueues or sends a message.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["confirm"], "properties": { "confirm": { "const": "materialize-due-reminder-previews" } } } } }
+        },
+        "responses": { "200": { "description": "Due preview materialization summary" }, "403": { "$ref": "#/components/responses/Forbidden" }, "428": { "description": "Exact confirmation required" } }
+      }
+    },
+    "/api/communication-reminder-runs": {
+      "get": {
+        "tags": ["Communications"],
+        "summary": "Read durable scheduled-reminder evaluation evidence",
+        "description": "Organizer-only run ledger. Every record exposes networkIntent=false and links to a preview outbox row or an explicit no-recipient/template block reason.",
+        "parameters": [{ "$ref": "#/components/parameters/Limit" }],
+        "responses": { "200": { "$ref": "#/components/responses/ItemList" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/communication-outbox": {
+      "get": { "$ref": "#/components/x-operations/ListCommunicationOutbox" },
+      "post": {
+        "tags": ["Communications"],
+        "summary": "Persist one allowlisted preview-only outbox record",
+        "description": "Requires deliveryMode=preview-only, networkIntent=false, the synthetic sender, and exactly one allowlisted synthetic recipient. No provider dispatch occurs.",
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "201": { "description": "Prepared preview and attempt zero" }, "200": { "description": "Idempotent replay" } }
+      }
+    },
+    "/api/communication-outbox/{id}/attempts": {
+      "get": {
+        "tags": ["Communications"],
+        "summary": "Read append-only preview attempt history",
+        "parameters": [{ "$ref": "#/components/parameters/Id" }],
+        "responses": { "200": { "$ref": "#/components/responses/ItemList" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/communication-outbox/{id}/release-approval": {
+      "post": {
+        "tags": ["Communications"],
+        "summary": "Queue one exact synthetic Gmail canary behind a one-time approval",
+        "description": "Organizer browser session only; API tokens are forbidden. Requires the encrypted release key, enabled runtime, Queue binding, Gmail DWD secret, exact persisted payload SHA-256, and confirmation phrase. The approval token is hashed in D1 and sent only to the queue. This endpoint never calls Gmail directly.",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/Id" },
+          { "name": "X-Callboard-Email-Release-Key", "in": "header", "required": true, "schema": { "type": "string" }, "description": "Operator-supplied encrypted runtime secret; never stored in D1" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["confirm", "exactPayloadHash"], "properties": { "confirm": { "const": "release-one-synthetic-email" }, "exactPayloadHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" } } } } }
+        },
+        "responses": { "202": { "description": "One ten-minute synthetic release queued; no plaintext approval token returned" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "409": { "$ref": "#/components/responses/Conflict" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      }
+    },
+    "/api/webhooks/subscriptions": {
+      "get": {
+        "tags": ["Webhooks"],
+        "summary": "List event-scoped webhook subscription metadata",
+        "description": "Organizer-only. Signing secrets are never returned by list operations.",
+        "responses": { "200": { "description": "Non-secret subscription metadata" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      },
+      "post": {
+        "tags": ["Webhooks"],
+        "summary": "Create a signed mock-webhook subscription",
+        "description": "Organizer-only. The deterministic whsec_ signing secret is returned once and is not stored in D1. The target must use HTTPS, but this deployment has no outbound webhook transport.",
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "201": { "description": "Subscription metadata and one-time signing secret" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      }
+    },
+    "/api/webhooks/subscriptions/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": {
+        "tags": ["Webhooks"],
+        "summary": "Read non-secret subscription metadata",
+        "responses": { "200": { "description": "Webhook subscription" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      },
+      "patch": {
+        "tags": ["Webhooks"],
+        "summary": "Version-update or disable a webhook subscription",
+        "parameters": [{ "$ref": "#/components/parameters/IfMatch" }],
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "200": { "description": "Updated subscription" }, "409": { "$ref": "#/components/responses/VersionConflict" } }
+      },
+      "delete": {
+        "tags": ["Webhooks"],
+        "summary": "Version-delete a subscription without delivery history",
+        "description": "A subscription with delivery history must be disabled instead so audit records remain intact.",
+        "parameters": [{ "$ref": "#/components/parameters/IfMatch" }],
+        "responses": { "204": { "description": "Deleted" }, "409": { "$ref": "#/components/responses/Conflict" } }
+      }
+    },
+    "/api/webhooks/events": {
+      "get": {
+        "tags": ["Webhooks"],
+        "summary": "List append-only lifecycle events",
+        "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }],
+        "responses": { "200": { "description": "Stable keyset page of webhook events" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/webhooks/events/{id}/deliveries": {
+      "post": {
+        "tags": ["Webhooks"],
+        "summary": "Persist signed mock delivery attempts",
+        "description": "Requires mode=mock and networkIntent=false. It signs the exact canonical JSON body with HMAC-SHA256 and records success or an explicitly injected mock failure. No fetch or provider transport occurs.",
+        "parameters": [{ "$ref": "#/components/parameters/Id" }, { "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "201": { "description": "Signed mock attempts" }, "200": { "description": "Idempotent replay" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/webhooks/deliveries": {
+      "get": {
+        "tags": ["Webhooks"],
+        "summary": "List the append-only mock delivery ledger",
+        "responses": { "200": { "description": "Signed delivery and retry records" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/webhooks/deliveries/{id}/retry": {
+      "post": {
+        "tags": ["Webhooks"],
+        "summary": "Retry one failed mock delivery",
+        "description": "Requires mode=mock and networkIntent=false. The new attempt links to the failed record, and a successful retry prevents duplicate retry lineage.",
+        "parameters": [{ "$ref": "#/components/parameters/Id" }, { "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "201": { "description": "Signed retry record" }, "200": { "description": "Idempotent replay" }, "409": { "$ref": "#/components/responses/Conflict" } }
+      }
+    },
+    "/api/integrations/accelevents": {
+      "get": {
+        "tags": ["Integrations"],
+        "summary": "Read shared Accelevents mock configuration and run history",
+        "responses": { "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IntegrationConfigEnvelope" } } }, "description": "Configuration and history" } }
+      },
+      "put": {
+        "tags": ["Integrations"],
+        "summary": "Version-save non-secret destination metadata and mappings",
+        "description": "Secret-like keys are rejected. The stored mode is always mock.",
+        "parameters": [{ "$ref": "#/components/parameters/IfMatch" }],
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "200": { "$ref": "#/components/responses/Item" }, "409": { "$ref": "#/components/responses/VersionConflict" } }
+      }
+    },
+    "/api/integrations/accelevents/runs": {
+      "post": {
+        "tags": ["Integrations"],
+        "summary": "Persist an idempotent mock plan or targeted failed-operation retry",
+        "description": "Only mode=mock and networkIntent=false are accepted. Real transport and deletes are rejected. Operations retain hashes, idempotency keys, results, and deterministic mock external IDs.",
+        "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
+        "responses": { "201": { "description": "Shared mock run and updated snapshot" }, "403": { "$ref": "#/components/responses/Forbidden" }, "409": { "$ref": "#/components/responses/Conflict" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": { "type": "apiKey", "in": "cookie", "name": "callboard_session", "description": "Secure HttpOnly event-scoped browser session" },
+      "apiToken": { "type": "http", "scheme": "bearer", "bearerFormat": "cbp_ opaque token", "description": "Expiring event-scoped API token with explicit resource:read or resource:write scopes. Plaintext is returned once; only SHA-256 is stored." }
+    },
+    "parameters": {
+      "Id": { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+      "FormId": { "name": "formId", "in": "path", "required": true, "schema": { "type": "string" } },
+      "ResumeToken": { "name": "resumeToken", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Opaque token; only its SHA-256 hash is stored" },
+      "IfMatch": { "name": "If-Match", "in": "header", "required": true, "schema": { "type": "string", "examples": ["\"3\""] }, "description": "Quoted current resource version" },
+      "IdempotencyKey": { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "maxLength": 180 } },
+      "Limit": { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 250, "default": 100 } },
+      "Cursor": { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string", "maxLength": 512 }, "description": "Opaque updatedAt/id keyset cursor returned as nextCursor by the preceding page" }
+    },
+    "requestBodies": {
+      "JsonObject": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } },
+      "ApiTokenCreate": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "maxLength": 80 }, "scopes": { "type": "array", "maxItems": 32, "items": { "type": "string", "pattern": "^(event|forms|submissions|people|reviews|sessions|tasks|resources|files|embeds|integrations|communications|workspace|webhooks):(read|write)$" } }, "expiresInDays": { "type": "integer", "minimum": 1, "maximum": 90, "default": 30 } } } } } }
+    },
+    "responses": {
+      "Item": { "description": "One versioned event-scoped resource", "content": { "application/json": { "schema": { "type": "object", "required": ["item"], "properties": { "item": { "$ref": "#/components/schemas/VersionedResource" } } } } } },
+      "Session": { "description": "Current role-scoped session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+      "Unauthorized": { "description": "No valid session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Forbidden": { "description": "Role is not allowed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "NotFound": { "description": "Resource is absent or not visible", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Conflict": { "description": "State, capacity, or idempotency conflict", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "VersionConflict": { "description": "If-Match does not equal the current version", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Unavailable": { "description": "Required binding or write capability is disabled", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "ItemList": { "description": "Role-scoped collection; normalized resource lists include limit and nextCursor", "content": { "application/json": { "schema": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/VersionedResource" } }, "limit": { "type": "integer" }, "nextCursor": { "type": ["string", "null"] } } } } } },
+      "ApiTokenList": { "description": "Non-secret API token metadata", "content": { "application/json": { "schema": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/ApiToken" } } } } } } }
+    },
+    "x-operations": {
+      "GetItem": { "tags": ["Program"], "summary": "Read one role-scoped item", "responses": { "200": { "$ref": "#/components/responses/Item" }, "404": { "$ref": "#/components/responses/NotFound" } } },
+      "CreateItem": { "tags": ["Program"], "summary": "Create one event-scoped item", "requestBody": { "$ref": "#/components/requestBodies/JsonObject" }, "responses": { "201": { "$ref": "#/components/responses/Item" }, "403": { "$ref": "#/components/responses/Forbidden" } } },
+      "UpdateItem": { "tags": ["Program"], "summary": "Version-update one item", "parameters": [{ "$ref": "#/components/parameters/IfMatch" }], "requestBody": { "$ref": "#/components/requestBodies/JsonObject" }, "responses": { "200": { "$ref": "#/components/responses/Item" }, "409": { "$ref": "#/components/responses/VersionConflict" } } },
+      "DeleteItem": { "tags": ["Program"], "summary": "Version-delete one item", "parameters": [{ "$ref": "#/components/parameters/IfMatch" }], "responses": { "204": { "description": "Deleted" }, "409": { "$ref": "#/components/responses/VersionConflict" } } },
+      "ListForms": { "tags": ["Forms"], "summary": "List role-visible forms", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListSubmissions": { "tags": ["Program"], "summary": "List role-visible submissions", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListPeople": { "tags": ["Program"], "summary": "List role-visible people", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListEvaluationRounds": { "tags": ["Evaluation"], "summary": "List role-visible evaluation rounds", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListEvaluationDecisions": { "tags": ["Evaluation"], "summary": "List organizer-visible decisions", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListReviews": { "tags": ["Evaluation"], "summary": "List role-visible review assignments and scores", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListSessions": { "tags": ["Program"], "summary": "List role-visible agenda sessions", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListTasks": { "tags": ["Portal"], "summary": "List role-visible onboarding tasks", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListResources": { "tags": ["Portal"], "summary": "List audience-filtered resources", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListFileRequests": { "tags": ["Portal"], "summary": "List owner/submission-scoped file requests", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListEmbeds": { "tags": ["Public"], "summary": "List organizer embed definitions", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListCommunicationTemplates": { "tags": ["Communications"], "summary": "List organizer templates", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListCommunicationReminders": { "tags": ["Communications"], "summary": "List organizer reminder definitions", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
+      "ListCommunicationOutbox": { "tags": ["Communications"], "summary": "List preview-only outbox records", "responses": { "200": { "$ref": "#/components/responses/ItemList" } } }
+    },
+    "schemas": {
+      "Error": { "type": "object", "required": ["error"], "properties": { "error": { "type": "string" }, "details": { "type": ["array", "object", "null"] } } },
+      "Health": { "type": "object", "required": ["ok", "service", "persistence", "writesEnabled", "expectedSchemaVersion"], "properties": { "ok": { "const": true }, "service": { "const": "callboard" }, "persistence": { "enum": ["d1", "localStorage"] }, "writesEnabled": { "type": "boolean" }, "sessionAuthConfigured": { "type": "boolean" }, "objectStorageConfigured": { "type": "boolean" }, "demoResetEnabled": { "type": "boolean" }, "emailDeliveryConfigured": { "type": "boolean" }, "reminderAutomationConfigured": { "type": "boolean" }, "expectedSchemaVersion": { "type": "integer" } } },
+      "Session": { "type": "object", "required": ["role", "eventId", "userId"], "properties": { "role": { "enum": ["organizer", "reviewer", "speaker"] }, "eventId": { "type": "string" }, "userId": { "type": "string" }, "personId": { "type": ["string", "null"] }, "email": { "type": "string", "format": "email" }, "expiresAt": { "type": "string", "format": "date-time" } } },
+      "ApiToken": { "type": "object", "required": ["id", "name", "tokenPrefix", "scopes", "expiresAt", "createdAt"], "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "tokenPrefix": { "type": "string", "description": "Non-secret display prefix only" }, "scopes": { "type": "array", "items": { "type": "string" } }, "expiresAt": { "type": "string", "format": "date-time" }, "lastUsedAt": { "type": ["string", "null"], "format": "date-time" }, "revokedAt": { "type": ["string", "null"], "format": "date-time" }, "createdAt": { "type": "string", "format": "date-time" } } },
+      "WebhookSubscription": { "type": "object", "required": ["id", "name", "targetUrl", "eventTypes", "enabled", "version", "createdAt", "updatedAt"], "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "targetUrl": { "type": "string", "format": "uri", "pattern": "^https://" }, "eventTypes": { "type": "array", "items": { "type": "string" } }, "enabled": { "type": "boolean" }, "secretVersion": { "type": "integer" }, "version": { "type": "integer" }, "createdAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" } } },
+      "WebhookEvent": { "type": "object", "required": ["id", "type", "subjectType", "subjectId", "payload", "idempotencyKey", "occurredAt"], "properties": { "id": { "type": "string" }, "type": { "type": "string" }, "subjectType": { "type": "string" }, "subjectId": { "type": "string" }, "payload": { "type": "object", "additionalProperties": true }, "idempotencyKey": { "type": "string" }, "occurredAt": { "type": "string", "format": "date-time" } } },
+      "WebhookDelivery": { "type": "object", "required": ["id", "webhookEventId", "subscriptionId", "attemptNumber", "mode", "status", "signature", "signatureTimestamp", "body", "networkIntent", "createdAt"], "properties": { "id": { "type": "string" }, "webhookEventId": { "type": "string" }, "subscriptionId": { "type": "string" }, "attemptNumber": { "type": "integer", "minimum": 1 }, "retryOfDeliveryId": { "type": ["string", "null"] }, "mode": { "const": "mock" }, "status": { "enum": ["SUCCEEDED", "FAILED"] }, "signature": { "type": "string", "pattern": "^v1=[a-f0-9]{64}$" }, "signatureTimestamp": { "type": "string", "format": "date-time" }, "body": { "type": "object", "additionalProperties": true }, "externalId": { "type": ["string", "null"] }, "error": { "type": ["string", "null"] }, "networkIntent": { "const": false }, "createdAt": { "type": "string", "format": "date-time" } } },
+      "VersionedResource": { "type": "object", "required": ["id", "version", "createdAt", "updatedAt"], "properties": { "id": { "type": "string" }, "version": { "type": "integer", "minimum": 1 }, "createdAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" } }, "additionalProperties": true },
+      "IntegrationConfigEnvelope": { "type": "object", "required": ["item"], "properties": { "item": { "$ref": "#/components/schemas/IntegrationConfig" } } },
+      "IntegrationConfig": { "allOf": [{ "$ref": "#/components/schemas/VersionedResource" }, { "type": "object", "required": ["provider", "direction", "mode", "externalSnapshot", "syncHistory"], "properties": { "provider": { "const": "accelevents" }, "direction": { "const": "CALLBOARD_TO_ACCELEVENTS" }, "mode": { "const": "mock" }, "eventUrl": { "type": "string" }, "eventId": { "type": "string" }, "speakerMapping": { "type": "object", "additionalProperties": { "type": "string" } }, "sessionMapping": { "type": "object", "additionalProperties": { "type": "string" } }, "externalSnapshot": { "type": "object", "additionalProperties": true }, "syncHistory": { "type": "array", "items": { "$ref": "#/components/schemas/IntegrationRun" } } } }] },
+      "IntegrationRun": { "type": "object", "required": ["id", "planId", "mode", "status", "networkIntent", "results"], "properties": { "id": { "type": "string" }, "planId": { "type": "string" }, "mode": { "const": "mock" }, "status": { "enum": ["SUCCEEDED", "PARTIAL"] }, "networkIntent": { "const": false }, "retryOfRunId": { "type": ["string", "null"] }, "results": { "type": "array", "items": { "type": "object", "required": ["entityType", "localId", "action", "status", "idempotencyKey", "payloadHash"], "properties": { "entityType": { "enum": ["speaker", "session", "sessionSpeaker"] }, "localId": { "type": "string" }, "action": { "enum": ["CREATE", "UPDATE", "SKIP", "BLOCKED"] }, "status": { "enum": ["SUCCEEDED", "SKIPPED", "FAILED", "BLOCKED"] }, "idempotencyKey": { "type": "string" }, "payloadHash": { "type": "string" }, "externalId": { "type": ["string", "null"] } } } } } }
+    }
+  },
+  "security": [{ "sessionCookie": [] }, { "apiToken": [] }],
+  "x-callboard-safety": {
+    "externalEmailDelivery": false,
+    "emailReleaseRequiresOneTimeApproval": true,
+    "scheduledReminderDelivery": false,
+    "externalWebhookDelivery": false,
+    "calendarProviderWrites": false,
+    "realAcceleventsTransport": false,
+    "objectStorageBound": false,
+    "deletePropagationToAccelevents": false
+  }
+}

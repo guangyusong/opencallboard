@@ -1,0 +1,25 @@
+name: Bug report
+description: Report a reproducible Callboard defect
+title: "[Bug]: "
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Include the route and the visible result.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction
+      description: List the smallest sequence that reproduces the issue.
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Delivery environment
+      options:
+        - Local development
+        - Local production build
+        - Public deployment
+    validations:
+      required: true
