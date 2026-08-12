@@ -79,7 +79,7 @@ const operations = [
   "Deadline reminders and decision communications",
 ];
 
-const WALKTHROUGH_AVAILABLE = false;
+const WALKTHROUGH_AVAILABLE = true;
 
 function Brand() {
   return (
@@ -273,7 +273,7 @@ export function LandingScreen() {
           <section className="landing-video-modal" role="dialog" aria-modal="true" aria-label="OpenCallboard product walkthrough">
             <div className="landing-video-header">
               <div className="landing-video-heading"><span>OpenCallboard in 90 seconds</span><small>Real browser interaction with a concise narrated tour</small></div>
-              <div className="landing-video-controls"><a href="/landing/callboard-walkthrough.mp4" target="_blank" rel="noreferrer">Full 4:15 walkthrough</a><button ref={closeButtonRef} type="button" onClick={() => setVideoOpen(false)} aria-label="Close video"><X size={20} /></button></div>
+              <div className="landing-video-controls"><button ref={closeButtonRef} type="button" onClick={() => setVideoOpen(false)} aria-label="Close video"><X size={20} /></button></div>
             </div>
             <video controls autoPlay playsInline poster="/landing/organizer-dashboard.webp"><source src="/landing/opencallboard-demo.mp4" type="video/mp4" /></video>
           </section>
