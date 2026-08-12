@@ -7265,6 +7265,23 @@ export default {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/")) return handleApi(request, env, url);
 
+    const directAppRoutes = new Set([
+      "/sessions",
+      "/schedule",
+      "/agenda",
+      "/speakers",
+      "/gallery",
+    ]);
+    if (
+      directAppRoutes.has(url.pathname) &&
+      ["GET", "HEAD"].includes(request.method)
+    ) {
+      const indexUrl = new URL(request.url);
+      indexUrl.pathname = "/";
+      indexUrl.search = "";
+      return env.ASSETS.fetch(new Request(indexUrl, request));
+    }
+
     const response = await env.ASSETS.fetch(request);
     const acceptsHtml = request.headers.get("accept")?.includes("text/html");
     if (

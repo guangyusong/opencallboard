@@ -79,6 +79,8 @@ const operations = [
   "Deadline reminders and decision communications",
 ];
 
+const WALKTHROUGH_AVAILABLE = false;
+
 function Brand() {
   return (
     <a className="landing-brand" href="/" aria-label="OpenCallboard home">
@@ -127,7 +129,9 @@ export function LandingScreen() {
           <button type="button" onClick={() => scrollToSection("product")}>Product</button>
           <button type="button" onClick={() => scrollToSection("workflow")}>Workflow</button>
           <button type="button" onClick={() => scrollToSection("open-source")}>Open source</button>
-          <button type="button" className="landing-nav-video" onClick={() => { setVideoOpen(true); closeMobile(); }}>Watch demo</button>
+          {WALKTHROUGH_AVAILABLE ? (
+            <button type="button" className="landing-nav-video" onClick={() => { setVideoOpen(true); closeMobile(); }}>Watch demo</button>
+          ) : null}
           <a className="landing-nav-cta" href="#/organizer-login" onClick={closeMobile}>Open demo <ArrowRight size={15} /></a>
         </nav>
       </header>
@@ -139,7 +143,11 @@ export function LandingScreen() {
           <p>OpenCallboard gives event teams one shared workflow for proposals, reviewer decisions, speaker onboarding, agenda production, and a published program—without enterprise bloat.</p>
           <div className="landing-actions">
             <a className="landing-button primary" href="#/organizer-login">Open organizer demo <ArrowRight size={17} /></a>
-            <button className="landing-button secondary" type="button" onClick={() => setVideoOpen(true)}><Play size={16} fill="currentColor" /> Watch walkthrough</button>
+            {WALKTHROUGH_AVAILABLE ? (
+              <button className="landing-button secondary" type="button" onClick={() => setVideoOpen(true)}><Play size={16} fill="currentColor" /> Watch walkthrough</button>
+            ) : (
+              <a className="landing-button secondary" href="#/submit/form_callboard_judge_cfp">Try the live workflow <ArrowRight size={16} /></a>
+            )}
           </div>
           <div className="landing-hero-note"><Check size={15} /> No attendee registration. No per-event pricing. Built for the program team.</div>
         </div>
@@ -260,7 +268,7 @@ export function LandingScreen() {
         <div><a href="#/submit/form_callboard_judge_cfp">Call for papers</a><a href="#/schedule">Schedule</a><a href="#/speakers">Speakers</a></div>
       </footer>
 
-      {videoOpen && (
+      {WALKTHROUGH_AVAILABLE && videoOpen && (
         <div className="landing-video-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setVideoOpen(false); }}>
           <section className="landing-video-modal" role="dialog" aria-modal="true" aria-label="OpenCallboard product walkthrough">
             <div className="landing-video-header">

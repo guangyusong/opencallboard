@@ -33,7 +33,8 @@ const AirtableScreen = lazy(() => import("./screens/AirtableScreens.jsx").then((
 const LandingScreen = lazy(() => import("./screens/LandingScreen.jsx").then((module) => ({ default: module.LandingScreen })));
 
 function currentRoute() {
-  const value = window.location.hash.replace(/^#/, "") || "/";
+  const hashRoute = window.location.hash.replace(/^#/, "");
+  const value = hashRoute || window.location.pathname || "/";
   return value.startsWith("/") ? value : `/${value}`;
 }
 
