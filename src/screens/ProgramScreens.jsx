@@ -541,7 +541,10 @@ export function AgendaScreen() {
   const roomOptions = useMemo(() => [...new Set(["Main Stage", "Hall A", "Hall B", ...data.sessions.map((session) => session.room).filter(Boolean)])], [data.sessions]);
   const trackOptions = useMemo(() => [...new Set(["Track 1", ...fieldOptions(data.forms || [], /track|category/i), ...data.abstracts.map((abstract) => abstract.track).filter(Boolean), ...data.sessions.map((session) => session.track).filter(Boolean)])], [data.abstracts, data.forms, data.sessions]);
   const filtered = data.sessions.filter((session) => `${session.title} ${session.description || ""}`.toLowerCase().includes(search.toLowerCase()) && (!draftsOnly || session.status === "Draft"));
-  const conflicts = useMemo(() => scheduleConflicts(data.sessions), [data.sessions]);
+  const conflicts = useMemo(
+    () => scheduleConflicts(data.sessions, data.participants),
+    [data.participants, data.sessions],
+  );
   const saveSession = async (form) => {
     if (form.id) {
       const { id, version, ...patch } = form;

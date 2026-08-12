@@ -841,6 +841,32 @@ function speakerSortKey(person) {
   return `${parts.at(-1) || ""} ${parts.slice(0, -1).join(" ")}`.toLowerCase();
 }
 
+function publicSpeakerDirectory(people) {
+  const groups = new Map();
+  for (const person of people) {
+    const key = String(person?.name || person?.id || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+    const current = groups.get(key);
+    const identityIds = [...new Set([
+      ...(current?.identityIds || (current?.id ? [current.id] : [])),
+      ...(person?.identityIds || (person?.id ? [person.id] : [])),
+    ])];
+    if (!current) {
+      groups.set(key, { ...person, identityIds });
+      continue;
+    }
+    const currentRichness = [current.publicHeadshotUrl, current.headshotUrl, current.bio, current.title, current.company].filter(Boolean).length;
+    const nextRichness = [person.publicHeadshotUrl, person.headshotUrl, person.bio, person.title, person.company].filter(Boolean).length;
+    groups.set(key, {
+      ...(nextRichness > currentRichness ? person : current),
+      identityIds,
+    });
+  }
+  return [...groups.values()];
+}
+
 function downloadItineraryIcs(sessions, timezone, eventName) {
   const clean = (value) =>
     String(value || "")
@@ -896,7 +922,7 @@ function EmbedPreview({ draft, device, data }) {
       String(item.status || "").toLowerCase() === "accepted" &&
       (draft.filter === "All tracks" || item.track === draft.filter),
   );
-  const baseSpeakers = acceptedParticipants(data)
+  const baseSpeakers = publicSpeakerDirectory(acceptedParticipants(data))
     .filter(
       (person) => String(person.role || "Speaker").toLowerCase() === "speaker",
     )
@@ -930,6 +956,10 @@ function EmbedPreview({ draft, device, data }) {
     data.participants.find((person) => person.id === id);
   const peopleFor = (session) =>
     (session.participants || []).map(personFor).filter(Boolean);
+  const speakerAppearsIn = (person, session) => {
+    const identityIds = person.identityIds || [person.id];
+    return (session.participants || []).some((id) => identityIds.includes(id));
+  };
   const searchText = (session) =>
     [
       session.title,
@@ -1290,8 +1320,8 @@ function EmbedPreview({ draft, device, data }) {
       </div>
       {dayTabs}
       <div className="embed-session-list">
-        {sessions.length ? (
-          sessions.map((session) => sessionCard(session, true))
+        {activeGroup?.sessions.length ? (
+          activeGroup.sessions.map(({ session }) => sessionCard(session, true))
         ) : (
           <div className="embed-empty-filter">
             {showMine
@@ -1306,7 +1336,7 @@ function EmbedPreview({ draft, device, data }) {
   const speakerDetail = selectedSpeaker
     ? (() => {
         const appearances = baseSessions.filter((session) =>
-          (session.participants || []).includes(selectedSpeaker.id),
+          speakerAppearsIn(selectedSpeaker, session),
         );
         return (
           <>
@@ -1362,7 +1392,7 @@ function EmbedPreview({ draft, device, data }) {
         {speakerMatches.length ? (
           speakerMatches.map((person) => {
             const appearances = baseSessions.filter((session) =>
-              (session.participants || []).includes(person.id),
+              speakerAppearsIn(person, session),
             );
             return (
               <article

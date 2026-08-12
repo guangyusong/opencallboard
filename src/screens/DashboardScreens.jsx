@@ -110,7 +110,7 @@ function EvaluationsPanel({ data, onNavigate }) {
 
 function AgendaPanel({ data, onNavigate }) {
   const scheduled = data.sessions.filter((session) => session.startsAt || session.start).length;
-  const conflicts = scheduleConflicts(data.sessions).length;
+  const conflicts = scheduleConflicts(data.sessions, data.participants).length;
   return <section className="db-panel"><div className="db-panel-head"><div><h3>Schedule health</h3><p>Accepted sessions that are scheduled, unscheduled, or in conflict.</p></div><button className="db-link" onClick={() => onNavigate?.("/agenda")}>Open agenda</button></div><div className="review-metrics" style={{ marginTop: 18 }}><div className="mini-metric"><span>Scheduled</span><strong>{scheduled}</strong></div><div className="mini-metric"><span>Unscheduled</span><strong>{Math.max(0, data.sessions.length - scheduled)}</strong></div><div className="mini-metric"><span>Conflicts</span><strong>{conflicts}</strong></div></div></section>;
 }
 

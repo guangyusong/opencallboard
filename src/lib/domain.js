@@ -48,8 +48,35 @@ export function acceptedSessions(data) {
   return (data.sessions ?? []).filter((session) => !["Declined", "Withdrawn"].includes(session.status));
 }
 
-export function scheduleConflicts(sessions = []) {
+function sessionParticipantRefs(session) {
+  return [
+    ...(Array.isArray(session?.participants) ? session.participants : []),
+    ...(Array.isArray(session?.participantIds) ? session.participantIds : []),
+  ];
+}
+
+function participantIdentity(ref, participantById) {
+  const id = typeof ref === "object" ? ref?.id : ref;
+  const person =
+    (id && participantById.get(id)) ||
+    (typeof ref === "object" ? ref : null);
+  const tokens = new Set();
+  if (id) tokens.add(`id:${id}`);
+  const email = normalizeEmail(person?.email);
+  if (email) tokens.add(`email:${email}`);
+  const name = String(person?.name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  if (name) tokens.add(`name:${name}`);
+  return { id, tokens };
+}
+
+export function scheduleConflicts(sessions = [], participants = []) {
   const conflicts = [];
+  const participantById = new Map(
+    participants.filter((person) => person?.id).map((person) => [person.id, person]),
+  );
   for (let left = 0; left < sessions.length; left += 1) for (let right = left + 1; right < sessions.length; right += 1) {
     const first = sessions[left];
     const second = sessions[right];
@@ -62,8 +89,22 @@ export function scheduleConflicts(sessions = []) {
     const resolvedStart = Math.ceil(firstEnd / (60 * 60 * 1000)) * 60 * 60 * 1000;
     const resolution = { label: `Move ${second.title} after ${first.title}`, sessionId: second.id, startsAt: new Date(resolvedStart).toISOString(), endsAt: new Date(resolvedStart + duration).toISOString() };
     if (first.room && first.room === second.room) conflicts.push({ id: `room-${first.id}-${second.id}`, type: "Room overlap", detail: `${first.title} and ${second.title} overlap in ${first.room}.`, sessions: [first.id, second.id], recommendation: "Move one session or assign a different room.", resolution });
-    const shared = (first.participants || []).filter((id) => (second.participants || []).includes(id));
-    if (shared.length) conflicts.push({ id: `speaker-${first.id}-${second.id}`, type: "Speaker conflict", detail: `${first.title} and ${second.title} share a participant at the same time.`, sessions: [first.id, second.id], participantIds: shared, recommendation: "Move one session so the shared speaker can attend both.", resolution });
+    const firstPeople = sessionParticipantRefs(first).map((ref) => participantIdentity(ref, participantById));
+    const secondPeople = sessionParticipantRefs(second).map((ref) => participantIdentity(ref, participantById));
+    const sharedTokens = new Set(
+      firstPeople.flatMap((person) =>
+        [...person.tokens].filter((token) =>
+          secondPeople.some((other) => other.tokens.has(token)),
+        ),
+      ),
+    );
+    const shared = [...new Set(
+      [...firstPeople, ...secondPeople]
+        .filter((person) => [...person.tokens].some((token) => sharedTokens.has(token)))
+        .map((person) => person.id)
+        .filter(Boolean),
+    )];
+    if (sharedTokens.size) conflicts.push({ id: `speaker-${first.id}-${second.id}`, type: "Speaker conflict", detail: `${first.title} and ${second.title} share a participant at the same time.`, sessions: [first.id, second.id], participantIds: shared, recommendation: "Move one session so the shared speaker can attend both.", resolution });
     if (first.track && first.track === second.track) conflicts.push({ id: `track-${first.id}-${second.id}`, type: "Track overlap", detail: `${first.title} and ${second.title} overlap in ${first.track}.`, sessions: [first.id, second.id], rule: "One session per track at a time", recommendation: "Move one session or assign a different track.", resolution });
   }
   return conflicts;
