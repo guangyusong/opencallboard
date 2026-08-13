@@ -41,6 +41,48 @@ const presets = [
   { name: "Schedule Health", tone: "indigo", tag: "AGENDA", widgets: 5, description: "Scheduled vs unscheduled sessions, sessions per day, room, and track." },
 ];
 
+function dashboardTiming(event = {}) {
+  const timezone = event.timezone || "UTC";
+  const now = new Date();
+  const start = event.start ? new Date(event.start) : null;
+  const end = event.end ? new Date(event.end) : null;
+  const validStart = start && !Number.isNaN(start.getTime());
+  const validEnd = end && !Number.isNaN(end.getTime());
+  const dateLabel = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(now);
+  const hour = Number(new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour: "numeric",
+    hourCycle: "h23",
+  }).format(now));
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+
+  if (!validStart) return { dateLabel, greeting, daysToEvent: null, countdown: "Event dates not set" };
+  if (validEnd && now > end) return { dateLabel, greeting, daysToEvent: 0, countdown: "Event ended" };
+  if (now >= start) return { dateLabel, greeting, daysToEvent: 0, countdown: "Event underway" };
+  const daysToEvent = Math.max(1, Math.ceil((start.getTime() - now.getTime()) / 86_400_000));
+  return { dateLabel, greeting, daysToEvent, countdown: `${daysToEvent} day${daysToEvent === 1 ? "" : "s"} to event` };
+}
+
+function formatFormClose(value, timezone) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone || "UTC",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
+}
+
 function KPI({ label, value, icon: Icon }) {
   return <article className="db-kpi"><span>{label}</span><strong>{value}</strong><Icon size={18} /></article>;
 }
@@ -60,7 +102,7 @@ function OverviewSummary({ data, accepted, pending, acceptedSpeakerCount }) {
   </>;
 }
 
-function SubmissionFormsPanel({ data, onNavigate }) {
+function SubmissionFormsPanel({ data, onNavigate, daysToEvent }) {
   const [pacingExpanded, setPacingExpanded] = useState(true);
   const [pacingMode, setPacingMode] = useState("days");
   const recent = useMemo(() => data.abstracts.map((item) => ({ ...item, speakers: participantsForAbstract(data, item).map((person) => person.name).join(", ") || "—" })), [data]);
@@ -69,13 +111,13 @@ function SubmissionFormsPanel({ data, onNavigate }) {
   return <section className="db-panel">
     <div className="pacing-card">
       <div className="pacing-head"><div><h3>Submission Pacing</h3><p>Cumulative submissions in the run-up to event start.</p></div><button className="db-link" aria-label={pacingExpanded ? "Collapse submission pacing" : "Expand submission pacing"} aria-expanded={pacingExpanded} onClick={() => setPacingExpanded((value) => !value)}><ChevronDown size={18} style={{ transform: pacingExpanded ? "none" : "rotate(-90deg)" }} /></button></div>
-      {pacingExpanded ? <><div className="pacing-metrics"><div className="mini-metric"><span>Submissions</span><strong>{data.abstracts.length}</strong></div><div className="mini-metric"><span>vs prior (T-65d)</span><strong>— —</strong></div><div className="mini-metric"><span>Days to event</span><strong>65</strong></div><div className="mini-metric"><span>This week vs prior</span><strong>+{data.abstracts.length}</strong></div></div>
+      {pacingExpanded ? <><div className="pacing-metrics"><div className="mini-metric"><span>Submissions</span><strong>{data.abstracts.length}</strong></div><div className="mini-metric"><span>vs prior ({daysToEvent === null ? "not scheduled" : `T-${daysToEvent}d`})</span><strong>— —</strong></div><div className="mini-metric"><span>Days to event</span><strong>{daysToEvent ?? "—"}</strong></div><div className="mini-metric"><span>This week vs prior</span><strong>+{data.abstracts.length}</strong></div></div>
       <div className="db-chart"><div className="chart-switch"><button className={pacingMode === "days" ? "active" : ""} onClick={() => setPacingMode("days")}>Days before event</button><button className={pacingMode === "date" ? "active" : ""} onClick={() => setPacingMode("date")}>Calendar date</button></div></div>
       <p>{pacingMode === "days" ? "Pick a prior event to compare submission pacing edition-over-edition." : "Calendar dates use the event timezone for this pacing view."}</p></> : null}
     </div>
     <div className="forms-heading"><h3>Your forms</h3><button className="db-link" onClick={() => onNavigate?.("/submission-forms")}>View 1 more</button></div>
     <div className="forms-progress"><div className="db-section-label">Submission progress</div><div className="progress-line"><span style={{ width: submitted ? "100%" : "0%" }} /></div><b>{submitted}</b> <span style={{ color: "#718097", fontSize: 12 }}>submitted</span></div>
-    <div className="form-cards">{data.forms.slice(0, 3).map((form) => { const formSubmissions = submissionsByForm.get(form.id) || 0; return <article className="form-card" key={form.id}><div className="form-top"><h4>{form.name}</h4><Pill tone="success">Open</Pill></div><p>{formSubmissions ? `${formSubmissions} submitted` : form.closes ? `Closes ${form.closes}` : "No submissions yet"}</p>{formSubmissions ? <div className="progress-line"><span style={{ width: "100%" }} /></div> : null}<div className="form-actions"><button onClick={() => onNavigate?.(`/public/cfp/${form.id}`)}><ArrowRight size={15} />View</button><button onClick={() => onNavigate?.(`/submission-form/${form.id}`)}><Settings size={15} />Manage</button></div></article>; })}</div>
+    <div className="form-cards">{data.forms.slice(0, 3).map((form) => { const formSubmissions = submissionsByForm.get(form.id) || 0; const open = String(form.status || "Open").toLowerCase() === "open"; return <article className="form-card" key={form.id}><div className="form-top"><h4>{form.name}</h4><Pill tone={open ? "success" : "neutral"}>{open ? "Open" : "Closed"}</Pill></div><p>{formSubmissions ? `${formSubmissions} submitted` : form.closes ? `Closes ${formatFormClose(form.closes, data.event?.timezone)}` : "No submissions yet"}</p>{formSubmissions ? <div className="progress-line"><span style={{ width: "100%" }} /></div> : null}<div className="form-actions"><button onClick={() => onNavigate?.(`/public/cfp/${form.id}`)}><ArrowRight size={15} />View</button><button onClick={() => onNavigate?.(`/submission-form/${form.id}`)}><Settings size={15} />Manage</button></div></article>; })}</div>
     <div className="recent-heading"><h3>Recent Submissions</h3><button className="db-link" onClick={() => onNavigate?.("/abstracts")}>View all</button></div>
     <div className="recent-table"><table><thead><tr><th>Source</th><th>Title</th><th>Status</th><th>Speakers</th><th>Tags</th><th>Submitted</th></tr></thead><tbody>{recent.map((row) => <tr key={row.id}><td>{row.source}</td><td>{row.title}</td><td><Pill tone={row.status === "Accepted" ? "success" : "neutral"}>{row.status}</Pill></td><td>{row.speakers}</td><td>{row.tags?.length ? <Pill>{row.tags[0]}</Pill> : "—"}</td><td>{row.submitted}</td></tr>)}</tbody></table></div>
   </section>;
@@ -144,20 +186,21 @@ export function DashboardScreen({ onNavigate = () => {} }) {
   const pending = data.abstracts.filter((item) => item.status === "Pending").length;
   const acceptedSpeakers = acceptedParticipants(data);
   const unscheduled = data.sessions.filter((session) => !session.startsAt && !session.start).length;
+  const timing = useMemo(() => dashboardTiming(data.event), [data.event?.start, data.event?.end, data.event?.timezone]);
   const chooseDashboard = (name) => {
     setCreatorOpen(false);
     if (["Speaker Tracking", "Submissions Pipeline", "Review Progress"].includes(name)) setActiveDashboard(name);
     else setActiveDashboard("Today");
   };
   return <div className="db-page"><style>{dashboardStyles}</style>
-    <div className="db-date">Saturday, August 8&nbsp;&nbsp; • &nbsp;&nbsp;65 days to event</div>
-    <h1 className="db-title">Good morning, {data.organizer.firstName}</h1>
+    <div className="db-date">{timing.dateLabel}&nbsp;&nbsp; • &nbsp;&nbsp;{timing.countdown}</div>
+    <h1 className="db-title">{timing.greeting}, {data.organizer.firstName}</h1>
     <div className="db-top-tabs">{dashboardTabs.map(([label, tone]) => <button key={label} className={`db-top-tab ${activeDashboard === label ? "active" : ""}`} onClick={() => setActiveDashboard(label)}><i className={`db-dot ${tone}`} />{label}</button>)}<Button className="db-add" icon={Plus} onClick={() => setCreatorOpen(true)}>Add Dashboard</Button></div>
     {activeDashboard === "Today" || activeDashboard === "Review Progress" ? <>
       <OverviewSummary data={data} accepted={accepted} pending={pending} acceptedSpeakerCount={acceptedSpeakers.length} />
       <div className="db-checks"><span>Also check</span><button onClick={() => onNavigate("/agenda")}><b>{unscheduled} accepted sessions still need a time slot on the agenda.</b> (Agenda) <ChevronRight size={14} /></button><span>·</span><button onClick={() => onNavigate("/abstracts")}><b>{pending} session submissions are awaiting a decision.</b> (Participants) <ChevronRight size={14} /></button><button className="more">+1 more</button></div>
       <div className="db-subtabs">{["Submission Forms", "Participants", "Evaluations", "Agenda"].map((label) => <button key={label} className={subtab === label ? "active" : ""} onClick={() => setSubtab(label)}>{label}</button>)}</div>
-      {subtab === "Submission Forms" ? <SubmissionFormsPanel data={data} onNavigate={onNavigate} /> : subtab === "Participants" ? <ParticipantsPanel data={data} onNavigate={onNavigate} /> : subtab === "Evaluations" ? <EvaluationsPanel data={data} onNavigate={onNavigate} /> : <AgendaPanel data={data} onNavigate={onNavigate} />}
+      {subtab === "Submission Forms" ? <SubmissionFormsPanel data={data} onNavigate={onNavigate} daysToEvent={timing.daysToEvent} /> : subtab === "Participants" ? <ParticipantsPanel data={data} onNavigate={onNavigate} /> : subtab === "Evaluations" ? <EvaluationsPanel data={data} onNavigate={onNavigate} /> : <AgendaPanel data={data} onNavigate={onNavigate} />}
     </> : <CustomDashboard kind={activeDashboard} data={data} />}
     <DashboardCreator open={creatorOpen} onClose={() => setCreatorOpen(false)} onChoose={chooseDashboard} />
   </div>;

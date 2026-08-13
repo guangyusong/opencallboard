@@ -163,7 +163,7 @@ test("health and bootstrap fail closed, then issue a server session", async (t) 
     persistence: "d1",
     writesEnabled: true,
     sessionAuthConfigured: true,
-    expectedSchemaVersion: 19,
+    expectedSchemaVersion: 20,
   });
 
   const denied = await worker.fetch(api("/api/bootstrap", {
@@ -204,6 +204,256 @@ test("health and bootstrap fail closed, then issue a server session", async (t) 
     body: JSON.stringify({ event: { name: "Other" }, organizer: { name: "Other", email: "other@example.test" } }),
   }), env);
   assert.equal(repeated.status, 409);
+});
+
+test("self-serve organizers create isolated event workspaces with one-time login links", async (t) => {
+  const env = testEnv({ CALLBOARD_SELF_SERVE_DEV_LINKS: "true" });
+  t.after(() => env.CALLBOARD_DB.close());
+
+  async function createAccount(email, name) {
+    const requested = await worker.fetch(api("/api/auth/organizer/request", {
+      method: "POST",
+      body: JSON.stringify({ email, name }),
+    }), env);
+    assert.equal(requested.status, 202);
+    const requestPayload = await body(requested);
+    const token = decodeURIComponent(requestPayload.developmentAccessPath.split("/").at(-1));
+    const redeemed = await worker.fetch(api("/api/auth/organizer/redeem", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }), env);
+    assert.equal(redeemed.status, 201);
+    const accountCookie = cookie(redeemed);
+    assert.match(accountCookie, /^callboard_account=/);
+    const replay = await worker.fetch(api("/api/auth/organizer/redeem", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }), env);
+    assert.equal(replay.status, 401);
+    return accountCookie;
+  }
+
+  async function createEvent(accountCookie, name, slug) {
+    const response = await worker.fetch(api("/api/account/events", {
+      method: "POST",
+      headers: { cookie: accountCookie },
+      body: JSON.stringify({
+        name,
+        slug,
+        timezone: "America/Los_Angeles",
+        startsAt: "2027-10-12T16:00:00.000Z",
+        endsAt: "2027-10-14T23:00:00.000Z",
+      }),
+    }), env);
+    assert.equal(response.status, 201);
+    return { eventCookie: cookie(response), payload: await body(response) };
+  }
+
+  const accountA = await createAccount("ada@example.test", "Ada Organizer");
+  const eventA = await createEvent(accountA, "Ada Summit", "ada-summit");
+  const accountB = await createAccount("grace@example.test", "Grace Organizer");
+  const eventB = await createEvent(accountB, "Grace Summit", "grace-summit");
+  assert.notEqual(eventA.payload.item.id, eventB.payload.item.id);
+
+  const denied = await worker.fetch(api(`/api/account/events/${eventB.payload.item.id}/select`, {
+    method: "POST",
+    headers: { cookie: accountA },
+    body: JSON.stringify({}),
+  }), env);
+  assert.equal(denied.status, 403);
+
+  const eventARead = await worker.fetch(api("/api/event", { headers: { cookie: eventA.eventCookie } }), env);
+  assert.equal(eventARead.status, 200);
+  assert.equal((await body(eventARead)).item.id, eventA.payload.item.id);
+  const eventBRead = await worker.fetch(api("/api/event", { headers: { cookie: eventB.eventCookie } }), env);
+  assert.equal(eventBRead.status, 200);
+  assert.equal((await body(eventBRead)).item.id, eventB.payload.item.id);
+
+  const eventAForm = await worker.fetch(api(`/api/public/forms/${eventA.payload.item.formId}`), env);
+  assert.equal(eventAForm.status, 200);
+  const eventAFormPayload = await body(eventAForm);
+  assert.equal(eventAFormPayload.form.externalTitle, "Ada Summit Call for Speakers");
+  assert.match(eventAFormPayload.form.welcomeMessage, /Welcome to the Ada Summit call for speakers/);
+  assert.doesNotMatch(eventAFormPayload.form.welcomeMessage, /DevFlow|synthetic|demo/i);
+  assert.deepEqual(eventAFormPayload.form.abstractFields.find((field) => field.id === "track").options, ["General"]);
+  assert.doesNotMatch(eventAFormPayload.form.participantSection.description, /synthetic|demo/i);
+
+  const accountAEvents = await worker.fetch(api("/api/account/events", { headers: { cookie: accountA } }), env);
+  assert.equal(accountAEvents.status, 200);
+  const accountAItems = (await body(accountAEvents)).items;
+  assert.deepEqual(accountAItems.map((item) => item.id), [eventA.payload.item.id]);
+  assert.ok(accountAItems[0].formId);
+  assert.ok(accountAItems[0].scheduleEmbedId);
+  assert.ok(accountAItems[0].speakerEmbedId);
+
+  await createEvent(accountA, "Ada Workshop", "ada-workshop");
+  await createEvent(accountA, "Ada Retreat", "ada-retreat");
+  const overLimit = await worker.fetch(api("/api/account/events", {
+    method: "POST",
+    headers: { cookie: accountA },
+    body: JSON.stringify({ name: "Ada Event Four", timezone: "UTC" }),
+  }), env);
+  assert.equal(overLimit.status, 409);
+  assert.equal((await body(overLimit)).error, "EVENT_LIMIT_REACHED");
+});
+
+test("self-serve organizer links queue and deliver through the branded transactional provider", async (t) => {
+  const queue = new MemoryQueue();
+  const providerCalls = [];
+  const env = testEnv({
+    CALLBOARD_SELF_SERVE_EMAIL_ENABLED: "true",
+    CALLBOARD_EMAIL_QUEUE: queue,
+    CALLBOARD_RESEND_API_KEY: "re_test_key",
+    CALLBOARD_AUTH_SENDER_EMAIL: "hello@opencallboard.com",
+    CALLBOARD_PUBLIC_ORIGIN: "https://app.opencallboard.com",
+    CALLBOARD_PROVIDER_FETCH: async (url, init) => {
+      providerCalls.push({ url: String(url), init });
+      return Response.json({ id: "resend-organizer-login-1" });
+    },
+  });
+  t.after(() => env.CALLBOARD_DB.close());
+
+  const requested = await worker.fetch(api("/api/auth/organizer/request", {
+    method: "POST",
+    body: JSON.stringify({ email: "organizer@example.test", name: "Test Organizer" }),
+  }), env);
+  assert.equal(requested.status, 202);
+  assert.equal((await body(requested)).developmentAccessPath, undefined);
+  assert.equal(queue.messages.length, 1);
+
+  let acknowledged = false;
+  let retried = false;
+  await worker.queue({ messages: [{
+    body: queue.messages[0],
+    ack: () => { acknowledged = true; },
+    retry: () => { retried = true; },
+  }] }, env);
+  assert.equal(acknowledged, true);
+  assert.equal(retried, false);
+  assert.equal(providerCalls.length, 1);
+  const exact = JSON.parse(providerCalls[0].init.body);
+  assert.equal(exact.from, "OpenCallboard <hello@opencallboard.com>");
+  assert.deepEqual(exact.to, ["organizer@example.test"]);
+  assert.match(exact.text, /https:\/\/app\.opencallboard\.com\/#\/organizer-access\//);
+  assert.equal(env.CALLBOARD_DB.database.prepare("SELECT delivery_status FROM organizer_login_challenges LIMIT 1").get().delivery_status, "delivered");
+});
+
+test("Turnstile is mandatory when configured and its public site key is exposed safely", async (t) => {
+  const providerCalls = [];
+  const env = testEnv({
+    CALLBOARD_SELF_SERVE_DEV_LINKS: "true",
+    CALLBOARD_TURNSTILE_SECRET_KEY: "turnstile-secret",
+    CALLBOARD_TURNSTILE_SITE_KEY: "turnstile-public-site-key",
+    CALLBOARD_PROVIDER_FETCH: async (url, init) => {
+      providerCalls.push({ url: String(url), init });
+      return Response.json({ success: true });
+    },
+  });
+  t.after(() => env.CALLBOARD_DB.close());
+  const health = await worker.fetch(api("/api/health"), env);
+  const healthPayload = await body(health);
+  assert.equal(healthPayload.turnstileConfigured, true);
+  assert.equal(healthPayload.turnstileSiteKey, "turnstile-public-site-key");
+
+  const missing = await worker.fetch(api("/api/auth/organizer/request", {
+    method: "POST",
+    body: JSON.stringify({ email: "organizer@example.test", name: "Test Organizer" }),
+  }), env);
+  assert.equal(missing.status, 400);
+  assert.equal((await body(missing)).error, "TURNSTILE_VERIFICATION_FAILED");
+
+  const verified = await worker.fetch(api("/api/auth/organizer/request", {
+    method: "POST",
+    headers: { "CF-Connecting-IP": "203.0.113.10" },
+    body: JSON.stringify({ email: "organizer@example.test", name: "Test Organizer", turnstileToken: "valid-token" }),
+  }), env);
+  assert.equal(verified.status, 202);
+  assert.equal(providerCalls.length, 1);
+  assert.equal(providerCalls[0].url, "https://challenges.cloudflare.com/turnstile/v0/siteverify");
+});
+
+test("organizer login requests are rate limited per email", async (t) => {
+  const env = testEnv({ CALLBOARD_SELF_SERVE_DEV_LINKS: "true" });
+  t.after(() => env.CALLBOARD_DB.close());
+  for (let index = 0; index < 5; index += 1) {
+    const response = await worker.fetch(api("/api/auth/organizer/request", {
+      method: "POST",
+      body: JSON.stringify({ email: "rate-limit@example.test", name: "Rate Limit" }),
+    }), env);
+    assert.equal(response.status, 202);
+  }
+  const blocked = await worker.fetch(api("/api/auth/organizer/request", {
+    method: "POST",
+    body: JSON.stringify({ email: "rate-limit@example.test", name: "Rate Limit" }),
+  }), env);
+  assert.equal(blocked.status, 429);
+});
+
+test("self-serve public submissions require a one-time speaker identity handoff", async (t) => {
+  const env = testEnv({ CALLBOARD_SELF_SERVE_DEV_LINKS: "true" });
+  t.after(() => env.CALLBOARD_DB.close());
+
+  const requested = await worker.fetch(api("/api/auth/organizer/request", {
+    method: "POST",
+    body: JSON.stringify({ email: "owner@example.test", name: "Event Owner" }),
+  }), env);
+  const loginPath = (await body(requested)).developmentAccessPath;
+  const organizerToken = decodeURIComponent(loginPath.split("/").at(-1));
+  const redeemed = await worker.fetch(api("/api/auth/organizer/redeem", {
+    method: "POST",
+    body: JSON.stringify({ token: organizerToken }),
+  }), env);
+  const accountCookie = cookie(redeemed);
+  const createdEvent = await worker.fetch(api("/api/account/events", {
+    method: "POST",
+    headers: { cookie: accountCookie },
+    body: JSON.stringify({
+      name: "Identity Proof Summit",
+      timezone: "America/Los_Angeles",
+      startsAt: "2027-10-12T16:00:00.000Z",
+      endsAt: "2027-10-14T23:00:00.000Z",
+    }),
+  }), env);
+  assert.equal(createdEvent.status, 201);
+  const event = (await body(createdEvent)).item;
+
+  const submitted = await worker.fetch(api(`/api/public/forms/${event.formId}/submissions`, {
+    method: "POST",
+    headers: { "idempotency-key": "self-serve-speaker-identity-proof" },
+    body: JSON.stringify({
+      email: "speaker@example.test",
+      title: "Operating reliable agent workflows",
+      abstract: "A practical session about safe production agent systems.",
+      category: "General",
+      answers: { Format: "Talk (30 min)", Track: "General" },
+      participants: [{
+        email: "speaker@example.test",
+        name: "Speaker One",
+        bio: "Builds reliable production systems.",
+      }],
+    }),
+  }), env);
+  assert.equal(submitted.status, 201);
+  assert.equal(cookie(submitted), "");
+  const submissionPayload = await body(submitted);
+  assert.equal(submissionPayload.portalAccess.authenticated, false);
+  assert.equal(submissionPayload.portalAccess.reason, "EMAIL_VERIFICATION_REQUIRED");
+  assert.equal(submissionPayload.portalAccess.deliveryStatus, "unavailable");
+  assert.match(submissionPayload.portalAccess.developmentAccessPath, /^\/#\/access\//);
+
+  const speakerToken = decodeURIComponent(submissionPayload.portalAccess.developmentAccessPath.split("/").at(-1));
+  const speaker = await worker.fetch(api("/api/session", {
+    method: "POST",
+    body: JSON.stringify({ grantToken: speakerToken }),
+  }), env);
+  assert.equal(speaker.status, 201);
+  assert.match(cookie(speaker), /^callboard_session=/);
+  assert.equal((await body(speaker)).role, "speaker");
+  const replay = await worker.fetch(api("/api/session", {
+    method: "POST",
+    body: JSON.stringify({ grantToken: speakerToken }),
+  }), env);
+  assert.equal(replay.status, 401);
 });
 
 test("temporary judge access is expiring, event-scoped, and distinct from the operator", async (t) => {
@@ -1708,7 +1958,7 @@ test("Airtable sync persists only destination metadata, previews exact changes, 
       method: "PUT",
       headers: { cookie: organizer.cookie, "if-match": '"0"' },
       body: JSON.stringify({
-        baseId: "appTestBase",
+        baseId: "appSyntheticJudge",
         personalAccessToken: "forbidden-secret",
       }),
     }),
@@ -1722,7 +1972,7 @@ test("Airtable sync persists only destination metadata, previews exact changes, 
       method: "PUT",
       headers: { cookie: organizer.cookie, "if-match": '"0"' },
       body: JSON.stringify({
-        baseId: "appTestBase",
+        baseId: "appSyntheticJudge",
         speakersTable: "Speakers",
         sessionsTable: "Sessions",
         speakerMapping: { callboardId: "Callboard ID", name: "Name", email: "Email" },

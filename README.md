@@ -38,6 +38,10 @@ published only after their visible data passes the same privacy scan as the sour
 - One-way Airtable export preview with field mapping, diffs, confirmation, idempotency,
   and run history; real provider writes remain separately gated
 - Cloudflare Worker persistence API backed by D1, R2, and Queue, with a local fallback
+- Email-backed self-serve organizer accounts with isolated event workspaces and one-time
+  speaker/reviewer access links
+- Reusable AWS SES transactional-email foundation with per-product domain identities,
+  least-privileged senders, bounce/complaint feedback, and Cloudflare Worker delivery
 
 ## Local preview
 
@@ -72,13 +76,17 @@ The seeded routes include:
 
 Organizer, reviewer, and speaker access is event-scoped. The checked-in identities use the
 reserved `.invalid` domain, so the default build cannot accidentally deliver mail. Real
-Gmail, Accelevents, and Airtable writes, paid services, and general-purpose production
+email, Accelevents, and Airtable writes, paid services, and general-purpose production
 identity remain disabled by default. The core workflow does not depend on an external
-integration.
+integration. The `selfserve` Wrangler environment is a fail-closed template: operators
+must provision their own D1, R2, Queue, Turnstile widget, verified sender, and encrypted
+secrets before enabling writes or identity delivery.
 
 For production architecture and enablement, see
 [`docs/architecture.md`](docs/architecture.md) and
 [`docs/CLOUDFLARE_AND_ACCELEVENTS.md`](docs/CLOUDFLARE_AND_ACCELEVENTS.md).
+The reusable SES deployment and rotation runbook is in
+[`infra/aws/README.md`](infra/aws/README.md).
 The deployed normalized API is documented in
 [`docs/backend-api.md`](docs/backend-api.md), with a machine-readable OpenAPI 3.1
 contract at [`public/openapi.json`](public/openapi.json).

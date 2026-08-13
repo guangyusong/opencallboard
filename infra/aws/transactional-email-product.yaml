@@ -1,0 +1,63 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Per-product SES identity and least-privileged sender for the shared email foundation.
+
+Parameters:
+  ProductName:
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+  DomainName:
+    Type: String
+  MailFromSubdomain:
+    Type: String
+    Default: mail
+  ConfigurationSetName:
+    Type: String
+    Default: shared-transactional
+    AllowedPattern: "[A-Za-z0-9_-]+"
+
+Resources:
+  ProductIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref DomainName
+      ConfigurationSetAttributes:
+        ConfigurationSetName: !Ref ConfigurationSetName
+      DkimAttributes:
+        SigningEnabled: true
+      MailFromAttributes:
+        BehaviorOnMxFailure: USE_DEFAULT_VALUE
+        MailFromDomain: !Sub "${MailFromSubdomain}.${DomainName}"
+
+  ProductSender:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub "${ProductName}-ses-sender"
+      Tags:
+        - Key: managed-by
+          Value: cloudformation
+        - Key: product
+          Value: !Ref ProductName
+      Policies:
+        - PolicyName: SendOnlyFromProductDomain
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: SendFromVerifiedProductIdentity
+                Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${DomainName}"
+                  - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${ConfigurationSetName}"
+                Condition:
+                  StringLike:
+                    ses:FromAddress: !Sub "*@${DomainName}"
+
+Outputs:
+  DomainIdentity:
+    Value: !Ref ProductIdentity
+  SenderUserName:
+    Value: !Ref ProductSender
+  MailFromDomain:
+    Value: !Sub "${MailFromSubdomain}.${DomainName}"

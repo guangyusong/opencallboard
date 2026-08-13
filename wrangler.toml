@@ -32,6 +32,46 @@ routes = []
 [env.preview.vars]
 CALLBOARD_WRITE_ENABLED = "false"
 
+# Self-serve deployment template. Provision dedicated D1, R2, and Queue
+# resources, add their bindings below, verify a sender domain, and store the
+# provider credentials with `wrangler secret put`. Keep all release flags false
+# until the matching resources and synthetic canaries have been verified.
+[env.selfserve]
+name = "opencallboard-selfserve"
+workers_dev = true
+preview_urls = true
+routes = []
+
+# Required bindings after provisioning:
+# [[env.selfserve.d1_databases]]
+# binding = "CALLBOARD_DB"
+# database_name = "REPLACE_WITH_D1_DATABASE_NAME"
+# database_id = "REPLACE_WITH_D1_DATABASE_ID"
+#
+# [[env.selfserve.r2_buckets]]
+# binding = "CALLBOARD_FILES"
+# bucket_name = "REPLACE_WITH_R2_BUCKET_NAME"
+#
+# [[env.selfserve.queues.producers]]
+# binding = "CALLBOARD_EMAIL_QUEUE"
+# queue = "REPLACE_WITH_QUEUE_NAME"
+#
+# [[env.selfserve.queues.consumers]]
+# queue = "REPLACE_WITH_QUEUE_NAME"
+# max_batch_size = 1
+# max_batch_timeout = 5
+# max_retries = 3
+
+[env.selfserve.vars]
+CALLBOARD_WRITE_ENABLED = "false"
+CALLBOARD_SELF_SERVE_DEV_LINKS = "false"
+CALLBOARD_SELF_SERVE_EMAIL_ENABLED = "false"
+CALLBOARD_IDENTITY_EMAIL_ENABLED = "false"
+CALLBOARD_EMAIL_RELEASE_ENABLED = "false"
+CALLBOARD_EMAIL_UI_RELEASE_ENABLED = "false"
+CALLBOARD_DEMO_RESET_ENABLED = "false"
+AIRTABLE_REAL_SYNC_ENABLED = "false"
+
 # Optional shared-state deployment template. Provision dedicated D1, R2, and
 # Queue resources, replace the D1 placeholder, and review every enable flag
 # before deploying this environment. No account ID, zone, route, provider

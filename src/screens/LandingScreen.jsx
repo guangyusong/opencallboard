@@ -88,8 +88,6 @@ const extras = [
   [Code2, "API and operational controls", "OpenAPI-documented endpoints, scoped tokens, D1 shared state, Queue-backed jobs, and observable delivery logs."],
 ];
 
-const WALKTHROUGH_AVAILABLE = true;
-
 function Brand() {
   return (
     <a className="landing-brand" href="/" aria-label="OpenCallboard home">
@@ -105,6 +103,7 @@ export function LandingScreen() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const closeButtonRef = useRef(null);
   const active = workflow.find((item) => item.key === activeKey) || workflow[0];
+  const createEventUrl = "https://app.opencallboard.com/#/organizer-login";
 
   useEffect(() => {
     if (!videoOpen) return undefined;
@@ -138,10 +137,8 @@ export function LandingScreen() {
           <button type="button" onClick={() => scrollToSection("product")}>Product</button>
           <button type="button" onClick={() => scrollToSection("workflow")}>Workflow</button>
           <button type="button" onClick={() => scrollToSection("open-source")}>Open source</button>
-          {WALKTHROUGH_AVAILABLE ? (
-            <button type="button" className="landing-nav-video" onClick={() => { setVideoOpen(true); closeMobile(); }}>Watch demo</button>
-          ) : null}
-          <a className="landing-nav-cta" href="#/organizer-login" onClick={closeMobile}>Open demo <ArrowRight size={15} /></a>
+          <button type="button" className="landing-nav-video" onClick={() => { setVideoOpen(true); closeMobile(); }}>Watch demo</button>
+          <a className="landing-nav-cta" href={createEventUrl} onClick={closeMobile}>Create event <ArrowRight size={15} /></a>
         </nav>
       </header>
 
@@ -151,12 +148,8 @@ export function LandingScreen() {
           <h1 id="landing-title">Run the program.<br />Not the paperwork.</h1>
           <p>OpenCallboard gives event teams one shared workflow for proposals, reviewer decisions, speaker onboarding, agenda production, and a published program—without enterprise bloat.</p>
           <div className="landing-actions">
-            <a className="landing-button primary" href="#/organizer-login">Open organizer demo <ArrowRight size={17} /></a>
-            {WALKTHROUGH_AVAILABLE ? (
-              <button className="landing-button secondary" type="button" onClick={() => setVideoOpen(true)}><Play size={16} fill="currentColor" /> Watch walkthrough</button>
-            ) : (
-              <a className="landing-button secondary" href="#/submit/form_callboard_judge_cfp">Try the live workflow <ArrowRight size={16} /></a>
-            )}
+            <a className="landing-button primary" href={createEventUrl}>Create your event <ArrowRight size={17} /></a>
+            <button className="landing-button secondary" type="button" onClick={() => setVideoOpen(true)}><Play size={16} fill="currentColor" /> Watch walkthrough</button>
           </div>
           <div className="landing-hero-note"><Check size={15} /> No attendee registration. No per-event pricing. Built for the program team.</div>
         </div>
@@ -283,7 +276,7 @@ export function LandingScreen() {
         </ol>
         <div className="landing-demo-actions">
           <a className="landing-button inverse" href="#/submit/form_callboard_judge_cfp">Start with the CFP <ArrowRight size={17} /></a>
-          <a className="landing-button ghost" href="#/organizer-login">Organizer access</a>
+          <a className="landing-button ghost" href={createEventUrl}>Create your event</a>
         </div>
       </section>
 
@@ -293,12 +286,12 @@ export function LandingScreen() {
         <div><a href="#/submit/form_callboard_judge_cfp">Call for papers</a><a href="#/schedule">Schedule</a><a href="#/speakers">Speakers</a></div>
       </footer>
 
-      {WALKTHROUGH_AVAILABLE && videoOpen && (
+      {videoOpen && (
         <div className="landing-video-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setVideoOpen(false); }}>
           <section className="landing-video-modal" role="dialog" aria-modal="true" aria-label="OpenCallboard product walkthrough">
             <div className="landing-video-header">
               <div className="landing-video-heading"><span>OpenCallboard in 90 seconds</span><small>Real browser interaction with a concise narrated tour</small></div>
-              <div className="landing-video-controls"><button ref={closeButtonRef} type="button" onClick={() => setVideoOpen(false)} aria-label="Close video"><X size={20} /></button></div>
+              <div className="landing-video-controls"><a href="/landing/callboard-walkthrough.mp4" target="_blank" rel="noreferrer">Full 4:15 walkthrough</a><button ref={closeButtonRef} type="button" onClick={() => setVideoOpen(false)} aria-label="Close video"><X size={20} /></button></div>
             </div>
             <video controls autoPlay playsInline poster="/landing/organizer-dashboard.webp"><source src="/landing/opencallboard-demo.mp4?v=20260812-natural" type="video/mp4" /></video>
           </section>

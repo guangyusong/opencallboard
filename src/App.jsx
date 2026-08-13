@@ -24,6 +24,8 @@ const CommunicationsScreen = lazy(() => import("./screens/CommunicationsScreens.
 const IntegrationScreen = lazy(() => import("./screens/IntegrationScreens.jsx").then((module) => ({ default: module.IntegrationScreen })));
 const EvaluationScreen = lazy(() => import("./screens/EvaluationScreens.jsx").then((module) => ({ default: module.EvaluationScreen })));
 const OrganizerLoginScreen = lazy(() => import("./screens/AuthScreens.jsx").then((module) => ({ default: module.OrganizerLoginScreen })));
+const OrganizerAccessScreen = lazy(() => import("./screens/AuthScreens.jsx").then((module) => ({ default: module.OrganizerAccessScreen })));
+const OrganizerWorkspaceScreen = lazy(() => import("./screens/AuthScreens.jsx").then((module) => ({ default: module.OrganizerWorkspaceScreen })));
 const AccessGrantScreen = lazy(() => import("./screens/AuthScreens.jsx").then((module) => ({ default: module.AccessGrantScreen })));
 const AccessRequiredScreen = lazy(() => import("./screens/AuthScreens.jsx").then((module) => ({ default: module.AccessRequiredScreen })));
 const EventTeamScreen = lazy(() => import("./screens/AuthScreens.jsx").then((module) => ({ default: module.EventTeamScreen })));
@@ -33,13 +35,15 @@ const AirtableScreen = lazy(() => import("./screens/AirtableScreens.jsx").then((
 const LandingScreen = lazy(() => import("./screens/LandingScreen.jsx").then((module) => ({ default: module.LandingScreen })));
 
 function currentRoute() {
-  const hashRoute = window.location.hash.replace(/^#/, "");
-  const value = hashRoute || window.location.pathname || "/";
+  const defaultRoute = window.location.hostname === "app.opencallboard.com"
+    ? "/organizer-login"
+    : "/";
+  const value = window.location.hash.replace(/^#/, "") || defaultRoute;
   return value.startsWith("/") ? value : `/${value}`;
 }
 
-function GenericScreen({ title, subtitle = "This secondary module is represented as an honest placeholder in the current release.", icon = Construction }) {
-  return <div className="page"><PageHeader title={title} subtitle={subtitle} icon={icon} /><EmptyState icon={icon} title={`${title} is not enabled yet`} description="No data is written from this placeholder. Use the implemented program workflows in the organizer navigation." /></div>;
+function GenericScreen({ title, subtitle = "This secondary module is represented as an honest placeholder in the current competition build.", icon = Construction }) {
+  return <div className="page"><PageHeader title={title} subtitle={subtitle} icon={icon} /><EmptyState icon={icon} title={`${title} is not enabled yet`} description="No data is written from this placeholder. Use the implemented competition workflows in the organizer navigation." /></div>;
 }
 
 function RoutedApp() {
@@ -71,6 +75,8 @@ function RoutedApp() {
     ? <PublicEmbedScreen route={publicAliasRoute} />
     : route === "/organizer-login"
     ? <OrganizerLoginScreen />
+    : route.startsWith("/organizer-access/")
+      ? <OrganizerAccessScreen token={decodeURIComponent(route.slice("/organizer-access/".length))} />
     : route.startsWith("/access/")
       ? <AccessGrantScreen token={decodeURIComponent(route.slice("/access/".length))} />
       : route === "/submit" || route.startsWith("/submit/") || route.startsWith("/public/cfp/")
@@ -111,7 +117,7 @@ function RoutedApp() {
     if (reviewerRoutes.includes(route)) return <EvaluationScreen onNavigate={navigate} />;
     if (route === "/crm") return <CrmScreen onNavigate={navigate} />;
     if (["/participants", "/speakers", "/contacts"].includes(route)) return <ParticipantsScreen onNavigate={navigate} />;
-    if (route === "/portals") return <GenericScreen title="Portals" subtitle="Portal configuration is not enabled in this release; Tasks, Forms, File Requests, Resources, and Files are implemented separately." icon={Globe2} />;
+    if (route === "/portals") return <GenericScreen title="Portals" subtitle="Portal configuration is not enabled in this competition build; Tasks, Forms, File Requests, Resources, and Files are implemented separately." icon={Globe2} />;
     if (route === "/event-team") return <EventTeamScreen />;
     return <GenericScreen title={route.slice(1).replaceAll("-", " ").replace(/\b\w/g, (c) => c.toUpperCase()) || "Callboard"} icon={Settings} />;
   }, [route]);
@@ -119,6 +125,11 @@ function RoutedApp() {
   const loading = <div className="route-loading"><span /></div>;
   if (anonymousScreen) return <Suspense fallback={loading}>{anonymousScreen}</Suspense>;
   if (!hydrated) return loading;
+  if (route === "/workspace" || session?.role === "account") {
+    if (sharedAvailable && !session) return <Suspense fallback={loading}><OrganizerLoginScreen /></Suspense>;
+    if (sharedAvailable && !["account", "organizer"].includes(session?.role)) return <Suspense fallback={loading}><AccessRequiredScreen denied /></Suspense>;
+    return <Suspense fallback={loading}><OrganizerWorkspaceScreen /></Suspense>;
+  }
   if (speakerScreen) {
     if (sharedAvailable && !session) return <Suspense fallback={loading}><AccessRequiredScreen /></Suspense>;
     if (sharedAvailable && !["speaker", "organizer"].includes(session?.role)) return <Suspense fallback={loading}><AccessRequiredScreen denied /></Suspense>;

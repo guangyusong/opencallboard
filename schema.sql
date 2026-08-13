@@ -1,4 +1,4 @@
--- Callboard D1 schema v18. Applying this file is idempotent.
+-- Callboard D1 schema v20. Applying this file is idempotent.
 -- app_state remains only as a guarded compatibility bridge for the local-first UI.
 PRAGMA foreign_keys = ON;
 
@@ -69,6 +69,29 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
   revoked_at TEXT,
   created_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS account_sessions (
+  id TEXT PRIMARY KEY NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS organizer_login_challenges (
+  id TEXT PRIMARY KEY NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL COLLATE NOCASE,
+  name TEXT,
+  request_ip_hash TEXT,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  delivery_status TEXT NOT NULL DEFAULT 'pending',
+  provider_message_id TEXT,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS api_tokens (
@@ -621,6 +644,9 @@ CREATE INDEX IF NOT EXISTS idx_embeds_event ON embeds(event_id, enabled);
 CREATE INDEX IF NOT EXISTS idx_files_owner ON file_metadata(event_id, owner_person_id);
 CREATE INDEX IF NOT EXISTS idx_app_state_updated_at ON app_state(updated_at);
 CREATE INDEX IF NOT EXISTS idx_api_tokens_event ON api_tokens(event_id, revoked_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_account_sessions_user ON account_sessions(user_id, revoked_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_organizer_login_email ON organizer_login_challenges(email, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_organizer_login_ip ON organizer_login_challenges(request_ip_hash, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_communication_release_outbox ON communication_release_approvals(event_id, outbox_id, status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_webhook_subscriptions_event ON webhook_subscriptions(event_id, enabled, updated_at);
 CREATE INDEX IF NOT EXISTS idx_webhook_events_event ON webhook_events(event_id, occurred_at, id);
@@ -679,3 +705,6 @@ VALUES (18, 'scheduled_reminder_preview_runs', CURRENT_TIMESTAMP);
 
 INSERT OR IGNORE INTO schema_migrations (version, name, applied_at)
 VALUES (19, 'speaker_professional_profile_fields', CURRENT_TIMESTAMP);
+
+INSERT OR IGNORE INTO schema_migrations (version, name, applied_at)
+VALUES (20, 'self_serve_organizer_accounts', CURRENT_TIMESTAMP);

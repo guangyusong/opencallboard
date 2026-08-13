@@ -594,7 +594,16 @@ function SchemaStepper({ steps, current }) {
   );
 }
 
-function schemaInitialAnswers(form, data, email, session) {
+function schemaInitialSubmissionAnswers(form) {
+  return (form.abstractFields ?? []).reduce((answers, field) => {
+    const value = field.type === "Checkbox" ? [] : "";
+    answers[answerKey(field)] = value;
+    answers[field.label] = value;
+    return answers;
+  }, {});
+}
+
+function schemaInitialParticipantAnswers(form, data, email, session) {
   const person =
     session?.role === "speaker"
       ? data.participants?.find((entry) => entry.id === data.portalPersonId) ?? {}
@@ -608,7 +617,7 @@ function schemaInitialAnswers(form, data, email, session) {
     Company: person.company ?? "",
     Biography: person.bio ?? "",
   };
-  return [...form.abstractFields, ...form.participantFields].reduce(
+  return (form.participantFields ?? []).reduce(
     (answers, field) => {
       const value =
         field.type === "Checkbox" ? [] : (defaults[field.label] ?? "");
@@ -617,6 +626,41 @@ function schemaInitialAnswers(form, data, email, session) {
       return answers;
     },
     {},
+  );
+}
+
+function answersForFields(fields, source, defaults = {}) {
+  return (fields ?? []).reduce((answers, field) => {
+    const key = answerKey(field);
+    const value = source?.[key] ?? source?.[field.label];
+    if (value !== undefined) {
+      answers[key] = value;
+      answers[field.label] = value;
+    }
+    return answers;
+  }, { ...defaults });
+}
+
+function participantEmailValue(form, answers) {
+  const emailField = (form.participantFields ?? []).find(
+    (field) => field.type === "Email",
+  );
+  return String(
+    answers?.[answerKey(emailField ?? {})] ?? answers?.Email ?? "",
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function legacyParticipantAnswers(form, answers) {
+  const abstractKeys = new Set(
+    (form.abstractFields ?? []).flatMap((field) => [
+      answerKey(field),
+      field.label,
+    ]),
+  );
+  return Object.fromEntries(
+    Object.entries(answers ?? {}).filter(([key]) => !abstractKeys.has(key)),
   );
 }
 
@@ -752,6 +796,8 @@ export function PublicCfpScreen({ route, onNavigate }) {
     data.forms?.[0] ??
     {};
   const form = useMemo(() => normalizePublicForm(rawForm), [rawForm]);
+  const publicTimezone =
+    remoteRawForm?.event?.timezone || data.event?.timezone || "UTC";
   const referenceWelcome =
     rawForm.id === "form-2" &&
     rawForm.externalTitle === "Session Submission Form" &&
@@ -759,7 +805,10 @@ export function PublicCfpScreen({ route, onNavigate }) {
   const speakerEmail = session?.role === "speaker" ? session.email || "" : "";
   const [email, setEmail] = useState(speakerEmail);
   const [answers, setAnswers] = useState(() =>
-    schemaInitialAnswers(form, data, speakerEmail, session),
+    schemaInitialSubmissionAnswers(form),
+  );
+  const [primaryParticipantAnswers, setPrimaryParticipantAnswers] = useState(
+    () => schemaInitialParticipantAnswers(form, data, speakerEmail, session),
   );
   const [additionalParticipants, setAdditionalParticipants] = useState([]);
   const [additionalErrors, setAdditionalErrors] = useState([]);
@@ -768,6 +817,7 @@ export function PublicCfpScreen({ route, onNavigate }) {
   const [submitting, setSubmitting] = useState(false);
   const [submissionMode, setSubmissionMode] = useState("local");
   const [portalReady, setPortalReady] = useState(false);
+  const [portalAccess, setPortalAccess] = useState(null);
   const [redirectSeconds, setRedirectSeconds] = useState(10);
   const [draftToken, setDraftToken] = useState(parsed.draftToken || "");
   const [draftVersion, setDraftVersion] = useState(null);
@@ -790,7 +840,10 @@ export function PublicCfpScreen({ route, onNavigate }) {
   }, [parsed.formId]);
   useEffect(() => {
     setEmail(speakerEmail);
-    setAnswers(schemaInitialAnswers(form, data, speakerEmail, session));
+    setAnswers(schemaInitialSubmissionAnswers(form));
+    setPrimaryParticipantAnswers(
+      schemaInitialParticipantAnswers(form, data, speakerEmail, session),
+    );
     setAdditionalParticipants([]);
     setAdditionalErrors([]);
     setErrors({});
@@ -798,6 +851,7 @@ export function PublicCfpScreen({ route, onNavigate }) {
     setSubmitting(false);
     setSubmissionMode("local");
     setPortalReady(false);
+    setPortalAccess(null);
     setDeviceDraftToken(
       parsed.draftToken ? "" : readDeviceDraft(form.id || parsed.formId),
     );
@@ -826,8 +880,36 @@ export function PublicCfpScreen({ route, onNavigate }) {
       rememberDeviceDraft(form.id, token);
       setDeviceDraftToken("");
       setEmail(result.item.email);
-      setAnswers(result.item.answers || {});
-      setAdditionalParticipants(result.item.participants || []);
+      const participantDefaults = schemaInitialParticipantAnswers(
+        form,
+        data,
+        result.item.email,
+        session,
+      );
+      setAnswers(
+        answersForFields(
+          form.abstractFields,
+          result.item.answers,
+          schemaInitialSubmissionAnswers(form),
+        ),
+      );
+      const savedParticipants = result.item.participants || [];
+      const hasSavedPrimary =
+        savedParticipants.length > 0 &&
+        participantEmailValue(form, savedParticipants[0]) ===
+          String(result.item.email || "").trim().toLowerCase();
+      setPrimaryParticipantAnswers(
+        answersForFields(
+          form.participantFields,
+          hasSavedPrimary
+            ? savedParticipants[0]
+            : legacyParticipantAnswers(form, result.item.answers),
+          participantDefaults,
+        ),
+      );
+      setAdditionalParticipants(
+        hasSavedPrimary ? savedParticipants.slice(1) : savedParticipants,
+      );
       setAdditionalErrors([]);
       setErrors({});
       setDraftVersion(result.item.version);
@@ -882,7 +964,10 @@ export function PublicCfpScreen({ route, onNavigate }) {
     steps.findIndex(([, path]) => path === parsed.stepName),
   );
   const submissionFields = visibleFields(form.abstractFields, answers);
-  const participantFields = visibleFields(form.participantFields, answers);
+  const participantFields = visibleFields(
+    form.participantFields,
+    primaryParticipantAnswers,
+  );
   const participantRole = form.participantRoles?.find(
     (role) => role.enabled,
   ) ?? { label: "Speaker", min: 1, max: 3 };
@@ -892,7 +977,7 @@ export function PublicCfpScreen({ route, onNavigate }) {
     Number(participantRole.max || 3),
   );
   const limit = submissionLimitState(data, form, email);
-  const closed = isFormClosed(form, Date.now(), data.event?.timezone || "UTC");
+  const closed = isFormClosed(form, Date.now(), publicTimezone);
   const crossErrors = validateCrossFieldRules(
     form.crossFieldRules,
     form.abstractFields,
@@ -910,6 +995,19 @@ export function PublicCfpScreen({ route, onNavigate }) {
       const nextErrors = { ...currentErrors };
       delete nextErrors[answerKey(field)];
       delete nextErrors._cross;
+      return nextErrors;
+    });
+  };
+  const setPrimaryParticipantAnswer = (field, value) => {
+    setPrimaryParticipantAnswers((currentAnswers) => ({
+      ...currentAnswers,
+      [answerKey(field)]: value,
+      [field.label]: value,
+    }));
+    setErrors((currentErrors) => {
+      if (!currentErrors[answerKey(field)]) return currentErrors;
+      const nextErrors = { ...currentErrors };
+      delete nextErrors[answerKey(field)];
       return nextErrors;
     });
   };
@@ -932,13 +1030,16 @@ export function PublicCfpScreen({ route, onNavigate }) {
     );
   };
   const validateParticipants = () => {
-    const primary = validateFields(form.participantFields, answers);
+    const primary = validateFields(
+      form.participantFields,
+      primaryParticipantAnswers,
+    );
     const secondary = additionalParticipants.map((participant) =>
-      validateFields(form.participantFields, { ...answers, ...participant }),
+      validateFields(form.participantFields, participant),
     );
     const emails = [
-      answers.Email ??
-        answers[
+      primaryParticipantAnswers.Email ??
+        primaryParticipantAnswers[
           answerKey(
             form.participantFields.find((field) => field.type === "Email") ??
               {},
@@ -991,7 +1092,10 @@ export function PublicCfpScreen({ route, onNavigate }) {
       {
         email,
         answers,
-        participants: additionalParticipants,
+        participants: [
+          primaryParticipantAnswers,
+          ...additionalParticipants,
+        ],
         stepName: steps[current]?.[1] || "submission",
       },
       { resumeToken: draftToken, version: draftVersion },
@@ -1048,7 +1152,10 @@ export function PublicCfpScreen({ route, onNavigate }) {
     setDraftVersion(null);
     setDraftNotice("");
     setEmail("");
-    setAnswers(schemaInitialAnswers(form, data, speakerEmail, session));
+    setAnswers(schemaInitialSubmissionAnswers(form));
+    setPrimaryParticipantAnswers(
+      schemaInitialParticipantAnswers(form, data, "", session),
+    );
     setAdditionalParticipants([]);
     setAdditionalErrors([]);
     setErrors({});
@@ -1115,7 +1222,10 @@ export function PublicCfpScreen({ route, onNavigate }) {
     const participantEmail = form.participantFields.find(
       (field) => field.type === "Email",
     );
-    const participantAnswerSets = [answers, ...additionalParticipants];
+    const participantAnswerSets = [
+      primaryParticipantAnswers,
+      ...additionalParticipants,
+    ];
     const nextPeople = participantAnswerSets.map(
       (participantAnswers, index) => {
         const participantEmailValue = String(
@@ -1354,6 +1464,7 @@ export function PublicCfpScreen({ route, onNavigate }) {
     }));
     setSubmissionMode(remote.ok ? "shared" : "local");
     setPortalReady(Boolean(remote.ok && remote.portalAccess?.authenticated));
+    setPortalAccess(remote.ok ? remote.portalAccess || null : null);
     rememberDeviceDraft(form.id, "");
     setDeviceDraftToken("");
     setSubmitting(false);
@@ -1372,7 +1483,7 @@ export function PublicCfpScreen({ route, onNavigate }) {
           {form.closeDate ? (
             <div>
               Form submissions will be accepted until{" "}
-              {formatEventDeadline(form.closeDate, data.event?.timezone || "UTC")}.
+              {formatEventDeadline(form.closeDate, publicTimezone)}.
             </div>
           ) : rawForm.closes ? (
             <div>Form submissions will be accepted until {rawForm.closes}.</div>
@@ -1477,7 +1588,11 @@ export function PublicCfpScreen({ route, onNavigate }) {
                     const emailField = form.participantFields.find(
                       (field) => field.type === "Email",
                     );
-                    if (emailField) setAnswer(emailField, event.target.value);
+                    if (emailField)
+                      setPrimaryParticipantAnswer(
+                        emailField,
+                        event.target.value,
+                      );
                   }}
                 />
                 {limit.reached ? (
@@ -1521,7 +1636,7 @@ export function PublicCfpScreen({ route, onNavigate }) {
             <div className="cfp-panel">
               {submissionFields.map((field) => (
                 <SchemaField
-                  key={field.id}
+                  key={`abstract-${field.id}`}
                   field={field}
                   answers={answers}
                   setAnswer={setAnswer}
@@ -1597,10 +1712,10 @@ export function PublicCfpScreen({ route, onNavigate }) {
                 </div>
                 {participantFields.map((field) => (
                   <SchemaField
-                    key={field.id}
+                    key={`primary-participant-${field.id}`}
                     field={field}
-                    answers={answers}
-                    setAnswer={setAnswer}
+                    answers={primaryParticipantAnswers}
+                    setAnswer={setPrimaryParticipantAnswer}
                     error={errors[answerKey(field)]}
                   />
                 ))}
@@ -1628,12 +1743,12 @@ export function PublicCfpScreen({ route, onNavigate }) {
                       Remove
                     </button>
                   </div>
-                  {visibleFields(form.participantFields, {
-                    ...answers,
-                    ...participantAnswers,
-                  }).map((field) => (
+                  {visibleFields(
+                    form.participantFields,
+                    participantAnswers,
+                  ).map((field) => (
                     <SchemaField
-                      key={field.id}
+                      key={`additional-participant-${index}-${field.id}`}
                       field={field}
                       answers={participantAnswers}
                       setAnswer={(item, value) =>
@@ -1710,7 +1825,7 @@ export function PublicCfpScreen({ route, onNavigate }) {
                 ) : null}
               </section>
               {form.collectParticipants
-                ? [answers, ...additionalParticipants].map(
+                ? [primaryParticipantAnswers, ...additionalParticipants].map(
                     (participantAnswers, index) => (
                       <section
                         className="cfp-review-card"
@@ -1721,10 +1836,10 @@ export function PublicCfpScreen({ route, onNavigate }) {
                           {form.participantSection.heading}
                         </h3>
                         <dl>
-                          {visibleFields(form.participantFields, {
-                            ...answers,
-                            ...participantAnswers,
-                          }).map((field) => (
+                          {visibleFields(
+                            form.participantFields,
+                            participantAnswers,
+                          ).map((field) => (
                             <div key={field.id} style={{ display: "contents" }}>
                               <dt>{field.label}</dt>
                               <dd>
@@ -1766,17 +1881,34 @@ export function PublicCfpScreen({ route, onNavigate }) {
               <button className="cfp-primary" onClick={continueToPortal}>
                 Continue to portal <ArrowRight size={16} />
               </button>
+            ) : portalAccess?.developmentAccessPath ? (
+              <button
+                className="cfp-primary"
+                onClick={() => {
+                  window.location.href = portalAccess.developmentAccessPath;
+                }}
+              >
+                Verify email and open portal <ArrowRight size={16} />
+              </button>
+            ) : portalAccess?.deliveryStatus === "queued" ? (
+              <p>
+                We emailed a private, one-time speaker portal link to {email}.
+              </p>
             ) : (
               <p>
-                Portal access will be sent to the primary speaker after
-                identity-email delivery is enabled.
+                Your proposal is saved. Ask the organizer for a private speaker
+                portal link if you do not receive one.
               </p>
             )}
             <div className="cfp-local-only">
               {submissionMode === "shared"
                 ? portalReady
-                  ? "Saved to the shared event workspace. A role-scoped portal session is ready for this newly created event identity; confirmation delivery remains disabled."
-                  : "Saved to the shared event workspace. Confirmation delivery is still disabled until the email release is approved."
+                  ? "Saved to the shared event workspace. Your verified, role-scoped speaker session is ready."
+                  : portalAccess?.deliveryStatus === "queued"
+                    ? "Saved to the shared event workspace. Identity email queued."
+                    : portalAccess?.developmentAccessPath
+                      ? "Saved to the isolated beta workspace. Use the verified development link above to continue."
+                      : "Saved to the shared event workspace. No identity email was sent."
                 : "Saved in this browser only. Confirmation email recorded as preview-only; no external message was sent."}
             </div>
           </div>

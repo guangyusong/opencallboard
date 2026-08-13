@@ -256,6 +256,86 @@ export function loginOrganizer(secret, fetchImpl = globalThis.fetch) {
   );
 }
 
+export function requestOrganizerLogin(
+  { email, name, turnstileToken } = {},
+  fetchImpl = globalThis.fetch,
+) {
+  return establishSession(
+    "/api/auth/organizer/request",
+    {
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, name, turnstileToken }),
+    },
+    fetchImpl,
+  );
+}
+
+export async function loadPublicHealth(fetchImpl = globalThis.fetch) {
+  if (!fetchImpl) return { ok: false, error: "BROWSER_FETCH_UNAVAILABLE" };
+  try {
+    const response = await fetchImpl("/api/health", {
+      headers: { accept: "application/json" },
+    });
+    const payload = await readJson(response);
+    return response.ok && payload
+      ? { ok: true, item: payload }
+      : { ok: false, error: payload?.error || "HEALTH_UNAVAILABLE" };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
+export function redeemOrganizerLogin(token, fetchImpl = globalThis.fetch) {
+  return establishSession(
+    "/api/auth/organizer/redeem",
+    {
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token }),
+    },
+    fetchImpl,
+  );
+}
+
+async function accountRequest(path, init = {}, fetchImpl = globalThis.fetch) {
+  if (!fetchImpl) return { ok: false, error: "BROWSER_FETCH_UNAVAILABLE" };
+  try {
+    const response = await fetchImpl(path, {
+      ...init,
+      headers: {
+        accept: "application/json",
+        ...(init.body ? { "content-type": "application/json" } : {}),
+        ...init.headers,
+      },
+    });
+    const payload = await readJson(response);
+    return response.ok
+      ? { ok: true, ...payload }
+      : { ok: false, status: response.status, error: payload?.error || "ACCOUNT_REQUEST_FAILED", details: payload?.details };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
+export function loadOrganizerAccount(fetchImpl = globalThis.fetch) {
+  return accountRequest("/api/account", {}, fetchImpl);
+}
+
+export function createOrganizerEvent(event, fetchImpl = globalThis.fetch) {
+  return accountRequest(
+    "/api/account/events",
+    { method: "POST", body: JSON.stringify(event) },
+    fetchImpl,
+  );
+}
+
+export function selectOrganizerEvent(eventId, fetchImpl = globalThis.fetch) {
+  return accountRequest(
+    `/api/account/events/${encodeURIComponent(eventId)}/select`,
+    { method: "POST", body: JSON.stringify({}) },
+    fetchImpl,
+  );
+}
+
 export function redeemAccessGrant(grantToken, fetchImpl = globalThis.fetch) {
   return establishSession(
     "/api/session",
@@ -843,6 +923,16 @@ export async function loadSharedWorkspace(fetchImpl = globalThis.fetch) {
         persistence: "localStorage",
         session: null,
         sharedAvailable,
+      };
+    }
+
+    if (sessionPayload.sessionType === "account" || sessionPayload.role === "account") {
+      return {
+        state: null,
+        persistence: "d1",
+        session: sessionPayload,
+        accountEvents: sessionPayload.events || [],
+        sharedAvailable: true,
       };
     }
 

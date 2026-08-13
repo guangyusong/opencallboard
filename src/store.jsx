@@ -186,6 +186,7 @@ export function StoreProvider({ children }) {
   const [persistenceStatus, setPersistenceStatus] = useState("checking");
   const [lastPersistenceError, setLastPersistenceError] = useState(null);
   const [session, setSession] = useState(null);
+  const [accountEvents, setAccountEvents] = useState([]);
   const [hydrated, setHydrated] = useState(false);
   const [sharedAvailable, setSharedAvailable] = useState(false);
 
@@ -195,6 +196,7 @@ export function StoreProvider({ children }) {
       if (cancelled) return;
       setPersistenceStatus(remote.persistence === "d1" ? "d1" : "localStorage");
       setSession(remote.session || null);
+      setAccountEvents(remote.accountEvents || []);
       setSharedAvailable(Boolean(remote.sharedAvailable || remote.persistence === "d1"));
       if (remote.state && !didMutate.current) {
         const hydrated = migrateData(remote.state);
@@ -210,7 +212,7 @@ export function StoreProvider({ children }) {
   }, [persistence]);
 
   useEffect(() => {
-    if (!hydrated || persistenceStatus !== "d1") return undefined;
+    if (!hydrated || persistenceStatus !== "d1" || session?.role === "account") return undefined;
     let cancelled = false;
 
     const refreshIfChanged = async () => {
@@ -250,7 +252,7 @@ export function StoreProvider({ children }) {
       window.removeEventListener("focus", refreshOnFocus);
       document.removeEventListener("visibilitychange", refreshOnVisibility);
     };
-  }, [hydrated, persistence, persistenceStatus]);
+  }, [hydrated, persistence, persistenceStatus, session?.role]);
 
   const update = (recipe) => {
     didMutate.current = true;
@@ -270,7 +272,7 @@ export function StoreProvider({ children }) {
     });
   };
 
-  const value = useMemo(() => ({ data, update, reset: () => update(initialData), persistenceStatus, lastPersistenceError, session, hydrated, sharedAvailable }), [data, persistenceStatus, lastPersistenceError, session, hydrated, sharedAvailable]);
+  const value = useMemo(() => ({ data, update, reset: () => update(initialData), persistenceStatus, lastPersistenceError, session, accountEvents, hydrated, sharedAvailable }), [data, persistenceStatus, lastPersistenceError, session, accountEvents, hydrated, sharedAvailable]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
 

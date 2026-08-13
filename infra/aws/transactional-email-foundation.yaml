@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Shared SES feedback and configuration foundation for independently scoped SaaS senders.
+
+Parameters:
+  ConfigurationSetName:
+    Type: String
+    Default: shared-transactional
+    AllowedPattern: "[A-Za-z0-9_-]+"
+
+Resources:
+  FeedbackKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Encrypts shared transactional email feedback events.
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: SesFeedbackEncryption
+            Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: "*"
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+
+  FeedbackKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/shared-transactional-feedback
+      TargetKeyId: !Ref FeedbackKey
+
+  FeedbackTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: shared-transactional-feedback
+      KmsMasterKeyId: !Ref FeedbackKey
+      Tags:
+        - Key: managed-by
+          Value: cloudformation
+        - Key: purpose
+          Value: transactional-email-feedback
+
+  FeedbackTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref FeedbackTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SesPublishesFeedback
+            Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref FeedbackTopic
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+
+  ConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: !Ref ConfigurationSetName
+      ReputationOptions:
+        ReputationMetricsEnabled: true
+      SendingOptions:
+        SendingEnabled: true
+      SuppressionOptions:
+        SuppressedReasons:
+          - BOUNCE
+          - COMPLAINT
+
+  FeedbackDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    DependsOn:
+      - FeedbackTopicPolicy
+      - FeedbackKeyAlias
+    Properties:
+      ConfigurationSetName: !Ref ConfigurationSet
+      EventDestination:
+        Enabled: true
+        MatchingEventTypes:
+          - BOUNCE
+          - COMPLAINT
+          - REJECT
+        SnsDestination:
+          TopicARN: !Ref FeedbackTopic
+
+Outputs:
+  ConfigurationSetName:
+    Value: !Ref ConfigurationSet
+  FeedbackTopicArn:
+    Value: !Ref FeedbackTopic

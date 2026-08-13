@@ -1,11 +1,15 @@
 import { sendSyntheticGmail, syntheticGmailConfigured } from "./gmail.js";
+import { sendTransactionalEmail, transactionalEmailConfigured } from "./transactionalEmail.js";
 
 const STATE_ID = "default";
 const MAX_STATE_BYTES = 2_000_000;
 const MAX_JSON_BYTES = 256_000;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const SESSION_COOKIE = "callboard_session";
+const ACCOUNT_COOKIE = "callboard_account";
 const SESSION_TTL_SECONDS = 8 * 60 * 60;
+const ACCOUNT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+const ORGANIZER_LOGIN_TTL_SECONDS = 15 * 60;
 const GRANT_TTL_SECONDS = 24 * 60 * 60;
 const CFP_DRAFT_TTL_SECONDS = 30 * 24 * 60 * 60;
 const COMPETITION_JUDGE_EVENT_ID = "event_callboard_judge_demo";
@@ -556,10 +560,30 @@ function setSessionCookie(response, token, maxAge = SESSION_TTL_SECONDS) {
   return response;
 }
 
+function setAccountCookie(
+  response,
+  token,
+  maxAge = ACCOUNT_SESSION_TTL_SECONDS,
+) {
+  response.headers.append(
+    "set-cookie",
+    `${ACCOUNT_COOKIE}=${encodeURIComponent(token)}; Path=/api; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`,
+  );
+  return response;
+}
+
 function clearSessionCookie(response) {
   response.headers.append(
     "set-cookie",
     `${SESSION_COOKIE}=; Path=/api; HttpOnly; Secure; SameSite=Strict; Max-Age=0`,
+  );
+  return response;
+}
+
+function clearAccountCookie(response) {
+  response.headers.append(
+    "set-cookie",
+    `${ACCOUNT_COOKIE}=; Path=/api; HttpOnly; Secure; SameSite=Strict; Max-Age=0`,
   );
   return response;
 }
@@ -589,6 +613,47 @@ function requireWrites(env) {
   if (env.CALLBOARD_WRITE_ENABLED !== "true")
     return apiError("WRITES_DISABLED", 503);
   return null;
+}
+
+function validEmail(value) {
+  return /^\S+@\S+\.\S+$/.test(String(value || "").trim());
+}
+
+function eventSlug(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80);
+}
+
+function validTimezone(value) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function verifyTurnstile(request, env, token) {
+  if (!env.CALLBOARD_TURNSTILE_SECRET_KEY) return true;
+  if (!token) return false;
+  const form = new FormData();
+  form.set("secret", env.CALLBOARD_TURNSTILE_SECRET_KEY);
+  form.set("response", token);
+  const ip = request.headers.get("CF-Connecting-IP");
+  if (ip) form.set("remoteip", ip);
+  try {
+    const response = await (env.CALLBOARD_PROVIDER_FETCH || fetch)(
+      "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+      { method: "POST", body: form },
+    );
+    const result = await response.json();
+    return Boolean(result?.success);
+  } catch {
+    return false;
+  }
 }
 
 function tokenAuthorized(request, env) {
@@ -681,6 +746,48 @@ async function authenticate(request, env) {
   };
 }
 
+async function authenticateAccount(request, env) {
+  if (!env.CALLBOARD_DB)
+    return { response: apiError("D1_NOT_CONFIGURED", 503) };
+  const token = cookieValue(request, ACCOUNT_COOKIE);
+  if (!token) return { response: apiError("UNAUTHENTICATED", 401) };
+  const timestamp = now();
+  const row = await env.CALLBOARD_DB.prepare(
+    `
+    SELECT s.id AS session_id, s.user_id, s.expires_at, u.email, u.name
+    FROM account_sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.token_hash = ?1 AND s.revoked_at IS NULL AND s.expires_at > ?2
+    LIMIT 1
+  `,
+  )
+    .bind(await sha256(token), timestamp)
+    .first();
+  if (!row)
+    return {
+      response: clearAccountCookie(apiError("INVALID_ACCOUNT_SESSION", 401)),
+    };
+  if (env.CALLBOARD_WRITE_ENABLED === "true") {
+    try {
+      await env.CALLBOARD_DB.prepare(
+        "UPDATE account_sessions SET last_seen_at = ?1 WHERE id = ?2",
+      )
+        .bind(timestamp, row.session_id)
+        .run();
+    } catch {}
+  }
+  return {
+    session: {
+      sessionId: row.session_id,
+      authType: "account_session",
+      userId: row.user_id,
+      expiresAt: row.expires_at,
+      email: row.email,
+      name: row.name,
+    },
+  };
+}
+
 async function issueSession(env, identity) {
   const token = randomToken();
   const sessionId = id("auth");
@@ -705,6 +812,22 @@ async function issueSession(env, identity) {
   return { token, sessionId, expiresAt };
 }
 
+async function issueAccountSession(env, userId) {
+  const token = randomToken();
+  const sessionId = id("account_auth");
+  const issuedAt = now();
+  const expiresAt = futureIso(ACCOUNT_SESSION_TTL_SECONDS);
+  await env.CALLBOARD_DB.prepare(
+    `
+    INSERT INTO account_sessions (id, token_hash, user_id, expires_at, created_at, last_seen_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+  `,
+  )
+    .bind(sessionId, await sha256(token), userId, expiresAt, issuedAt)
+    .run();
+  return { token, sessionId, expiresAt };
+}
+
 async function handleHealth(request, env) {
   const judgeAccessExpiresAt = String(
     env.CALLBOARD_JUDGE_ACCESS_EXPIRES_AT || "",
@@ -717,6 +840,17 @@ async function handleHealth(request, env) {
     sessionAuthConfigured: Boolean(
       env.CALLBOARD_DB && env.CALLBOARD_BOOTSTRAP_SECRET,
     ),
+    selfServeAuthConfigured: Boolean(
+      env.CALLBOARD_DB &&
+        (env.CALLBOARD_SELF_SERVE_DEV_LINKS === "true" ||
+          (env.CALLBOARD_SELF_SERVE_EMAIL_ENABLED === "true" &&
+            env.CALLBOARD_EMAIL_QUEUE &&
+            transactionalEmailConfigured(env))),
+    ),
+    turnstileConfigured: Boolean(env.CALLBOARD_TURNSTILE_SECRET_KEY),
+    turnstileSiteKey: env.CALLBOARD_TURNSTILE_SECRET_KEY
+      ? String(env.CALLBOARD_TURNSTILE_SITE_KEY || "").trim() || null
+      : null,
     judgeAccessConfigured: Boolean(
       env.CALLBOARD_DB &&
         env.CALLBOARD_JUDGE_ACCESS_SECRET &&
@@ -749,7 +883,7 @@ async function handleHealth(request, env) {
     airtableSyncConfigured: Boolean(
       env.AIRTABLE_REAL_SYNC_ENABLED === "true" && env.AIRTABLE_API_TOKEN,
     ),
-    expectedSchemaVersion: 19,
+    expectedSchemaVersion: 20,
     timestamp: now(),
   };
   return request.method === "HEAD"
@@ -938,6 +1072,26 @@ function demoCfpSchema() {
     confirmationSubject: "We received your submission: {{submission.title}}",
     confirmationBody:
       "Hi {{participant.firstName}},\n\nThanks for submitting {{submission.title}} to {{event.name}}. You can use the speaker portal to review the proposal and follow its status.\n\n— Callboard Event Ops",
+  };
+}
+
+function selfServeCfpSchema(eventName, closesAt) {
+  const schema = demoCfpSchema();
+  return {
+    ...schema,
+    externalTitle: `${eventName} Call for Speakers`,
+    welcomeMessage:
+      `Welcome to the ${eventName} call for speakers.\n\nShare a clear session idea, who it is for, and the practical takeaway attendees can expect. The event team will review your proposal and keep you updated through the speaker portal.`,
+    participantSection: {
+      ...schema.participantSection,
+      description:
+        "Add the primary speaker and, when relevant, up to two co-speakers. Each speaker will receive private portal access after submission.",
+    },
+    abstractFields: schema.abstractFields.map((field) =>
+      field.id === "track" ? { ...field, options: ["General"] } : field,
+    ),
+    closeDate: closesAt,
+    routingRules: [],
   };
 }
 
@@ -1443,31 +1597,334 @@ async function handleBootstrap(request, env) {
   );
 }
 
+async function accountEvents(env, userId) {
+  const result = await env.CALLBOARD_DB.prepare(
+    `
+    SELECT e.id, e.slug, e.name, e.short_name, e.timezone, e.starts_at, e.ends_at,
+      e.location, e.updated_at,
+      (SELECT id FROM cfp_forms WHERE event_id = e.id ORDER BY created_at ASC LIMIT 1) AS form_id,
+      (SELECT id FROM embeds WHERE event_id = e.id AND enabled = 1 AND json_extract(config_json, '$.type') = 'Schedule' ORDER BY created_at ASC LIMIT 1) AS schedule_embed_id,
+      (SELECT id FROM embeds WHERE event_id = e.id AND enabled = 1 AND json_extract(config_json, '$.type') = 'Speaker' ORDER BY created_at ASC LIMIT 1) AS speaker_embed_id
+    FROM event_memberships m
+    JOIN events e ON e.id = m.event_id
+    WHERE m.user_id = ?1 AND m.role = 'organizer'
+    ORDER BY e.updated_at DESC, e.created_at DESC
+  `,
+  )
+    .bind(userId)
+    .all();
+  return (result.results || []).map((row) => ({
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    shortName: row.short_name,
+    timezone: row.timezone,
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    location: row.location,
+    updatedAt: row.updated_at,
+    formId: row.form_id || null,
+    scheduleEmbedId: row.schedule_embed_id || null,
+    speakerEmbedId: row.speaker_embed_id || null,
+  }));
+}
+
+async function handleOrganizerLoginRequest(request, env) {
+  const writeError = requireWrites(env);
+  if (writeError) return writeError;
+  const deliveryAvailable =
+    env.CALLBOARD_SELF_SERVE_DEV_LINKS === "true" ||
+    (env.CALLBOARD_SELF_SERVE_EMAIL_ENABLED === "true" &&
+      env.CALLBOARD_EMAIL_QUEUE &&
+      transactionalEmailConfigured(env));
+  if (!deliveryAvailable) return apiError("ORGANIZER_LOGIN_DELIVERY_UNAVAILABLE", 503);
+  const parsed = await parseJson(request);
+  if (parsed.error) return apiError(parsed.error, parsed.status);
+  const email = String(parsed.payload.email || "").trim().toLowerCase();
+  const name = String(parsed.payload.name || "").trim().slice(0, 120);
+  if (!validEmail(email)) return apiError("VALID_EMAIL_REQUIRED", 400);
+  if (!(await verifyTurnstile(request, env, parsed.payload.turnstileToken)))
+    return apiError("TURNSTILE_VERIFICATION_FAILED", 400);
+
+  const ip = String(request.headers.get("CF-Connecting-IP") || "unknown");
+  const ipHash = await sha256(`organizer-login:${ip}`);
+  const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const limits = await env.CALLBOARD_DB.prepare(
+    `
+    SELECT
+      SUM(CASE WHEN email = ?1 COLLATE NOCASE THEN 1 ELSE 0 END) AS email_count,
+      SUM(CASE WHEN request_ip_hash = ?2 THEN 1 ELSE 0 END) AS ip_count
+    FROM organizer_login_challenges
+    WHERE created_at > ?3
+  `,
+  )
+    .bind(email, ipHash, since)
+    .first();
+  if (Number(limits?.email_count || 0) >= 5 || Number(limits?.ip_count || 0) >= 20)
+    return apiError("LOGIN_RATE_LIMITED", 429);
+
+  const token = randomToken();
+  const challengeId = id("organizer_login");
+  const createdAt = now();
+  const expiresAt = futureIso(ORGANIZER_LOGIN_TTL_SECONDS);
+  const development = env.CALLBOARD_SELF_SERVE_DEV_LINKS === "true";
+  await env.CALLBOARD_DB.prepare(
+    `
+    INSERT INTO organizer_login_challenges
+      (id, token_hash, email, name, request_ip_hash, expires_at, delivery_status, created_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+  `,
+  )
+    .bind(
+      challengeId,
+      await sha256(token),
+      email,
+      name || null,
+      ipHash,
+      expiresAt,
+      development ? "development" : "queued",
+      createdAt,
+    )
+    .run();
+  if (!development) {
+    await env.CALLBOARD_EMAIL_QUEUE.send({
+      version: 1,
+      type: "organizer_magic_link",
+      challengeId,
+      token,
+    });
+  }
+  const origin = String(env.CALLBOARD_PUBLIC_ORIGIN || new URL(request.url).origin).replace(/\/$/, "");
+  return json(
+    {
+      ok: true,
+      expiresAt,
+      ...(development
+        ? { developmentAccessPath: `/#/organizer-access/${encodeURIComponent(token)}`, developmentAccessUrl: `${origin}/#/organizer-access/${encodeURIComponent(token)}` }
+        : {}),
+    },
+    { status: 202 },
+  );
+}
+
+async function handleOrganizerLoginRedeem(request, env) {
+  const writeError = requireWrites(env);
+  if (writeError) return writeError;
+  const parsed = await parseJson(request);
+  if (parsed.error) return apiError(parsed.error, parsed.status);
+  const token = String(parsed.payload.token || "").trim();
+  if (!token) return apiError("LOGIN_TOKEN_REQUIRED", 400);
+  const timestamp = now();
+  const challenge = await env.CALLBOARD_DB.prepare(
+    `
+    SELECT id, email, name
+    FROM organizer_login_challenges
+    WHERE token_hash = ?1 AND used_at IS NULL AND expires_at > ?2
+    LIMIT 1
+  `,
+  )
+    .bind(await sha256(token), timestamp)
+    .first();
+  if (!challenge) return apiError("INVALID_OR_EXPIRED_LOGIN", 401);
+  const claim = await env.CALLBOARD_DB.prepare(
+    "UPDATE organizer_login_challenges SET used_at = ?1 WHERE id = ?2 AND used_at IS NULL",
+  )
+    .bind(timestamp, challenge.id)
+    .run();
+  if (!claim.meta?.changes) return apiError("INVALID_OR_EXPIRED_LOGIN", 401);
+
+  let user = await env.CALLBOARD_DB.prepare(
+    "SELECT id, email, name FROM users WHERE email = ?1 COLLATE NOCASE LIMIT 1",
+  )
+    .bind(challenge.email)
+    .first();
+  if (!user) {
+    const userId = id("user");
+    const fallbackName = String(challenge.name || challenge.email.split("@")[0]).trim().slice(0, 120);
+    await env.CALLBOARD_DB.prepare(
+      "INSERT INTO users (id, email, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+    )
+      .bind(userId, challenge.email, fallbackName, timestamp)
+      .run();
+    user = { id: userId, email: challenge.email, name: fallbackName };
+  } else if (challenge.name && challenge.name !== user.name) {
+    await env.CALLBOARD_DB.prepare(
+      "UPDATE users SET name = ?1, updated_at = ?2 WHERE id = ?3",
+    )
+      .bind(challenge.name, timestamp, user.id)
+      .run();
+    user.name = challenge.name;
+  }
+  const issued = await issueAccountSession(env, user.id);
+  const events = await accountEvents(env, user.id);
+  return setAccountCookie(
+    json(
+      {
+        authenticated: true,
+        sessionType: "account",
+        userId: user.id,
+        email: user.email,
+        name: user.name,
+        expiresAt: issued.expiresAt,
+        events,
+      },
+      { status: 201 },
+    ),
+    issued.token,
+  );
+}
+
+async function handleAccount(request, env, url) {
+  const account = await authenticateAccount(request, env);
+  if (account.response) return account.response;
+  const session = account.session;
+  if (request.method === "GET" && url.pathname === "/api/account")
+    return json({ authenticated: true, sessionType: "account", ...session, events: await accountEvents(env, session.userId) });
+  if (request.method === "GET" && url.pathname === "/api/account/events")
+    return json({ items: await accountEvents(env, session.userId) });
+  if (request.method !== "POST") return apiError("METHOD_NOT_ALLOWED", 405);
+  const writeError = requireWrites(env);
+  if (writeError) return writeError;
+
+  const selectMatch = url.pathname.match(/^\/api\/account\/events\/([^/]+)\/select$/);
+  if (selectMatch) {
+    const eventId = decodeURIComponent(selectMatch[1]);
+    const membership = await env.CALLBOARD_DB.prepare(
+      "SELECT person_id FROM event_memberships WHERE event_id = ?1 AND user_id = ?2 AND role = 'organizer' LIMIT 1",
+    )
+      .bind(eventId, session.userId)
+      .first();
+    if (!membership) return apiError("EVENT_ACCESS_DENIED", 403);
+    const issued = await issueSession(env, { userId: session.userId, eventId, role: "organizer" });
+    return setSessionCookie(
+      json({ authenticated: true, userId: session.userId, eventId, role: "organizer", personId: membership.person_id || null, expiresAt: issued.expiresAt }, { status: 201 }),
+      issued.token,
+    );
+  }
+
+  if (url.pathname !== "/api/account/events") return apiError("NOT_FOUND", 404);
+  const ownedEventCount = await env.CALLBOARD_DB.prepare(
+    "SELECT COUNT(DISTINCT event_id) AS count FROM event_memberships WHERE user_id = ?1 AND role = 'organizer'",
+  )
+    .bind(session.userId)
+    .first();
+  if (Number(ownedEventCount?.count || 0) >= 3)
+    return apiError("EVENT_LIMIT_REACHED", 409);
+  const parsed = await parseJson(request);
+  if (parsed.error) return apiError(parsed.error, parsed.status);
+  const input = parsed.payload;
+  const name = String(input.name || "").trim().slice(0, 160);
+  const timezone = String(input.timezone || "UTC").trim();
+  const startsAt = String(input.startsAt || "").trim();
+  const endsAt = String(input.endsAt || "").trim();
+  const slug = eventSlug(input.slug || name);
+  if (!name || !slug || !validTimezone(timezone))
+    return apiError("EVENT_FIELDS_INVALID", 400, ["name", "timezone"]);
+  if (startsAt && !Number.isFinite(Date.parse(startsAt)))
+    return apiError("EVENT_START_INVALID", 400);
+  if (endsAt && (!Number.isFinite(Date.parse(endsAt)) || (startsAt && Date.parse(endsAt) < Date.parse(startsAt))))
+    return apiError("EVENT_END_INVALID", 400);
+  const existingSlug = await env.CALLBOARD_DB.prepare("SELECT id FROM events WHERE slug = ?1 LIMIT 1").bind(slug).first();
+  if (existingSlug) return apiError("EVENT_SLUG_TAKEN", 409);
+
+  const eventId = id("event");
+  const personId = id("person");
+  const formId = id("form");
+  const roundId = id("evaluation_round");
+  const scheduleEmbedId = id("embed_schedule");
+  const speakerEmbedId = id("embed_speakers");
+  const timestamp = now();
+  const eventStartMs = startsAt ? Date.parse(startsAt) : Date.now() + 90 * 24 * 60 * 60 * 1000;
+  const closesAt = new Date(eventStartMs - 14 * 24 * 60 * 60 * 1000).toISOString();
+  const cfpSchema = selfServeCfpSchema(name, closesAt);
+  const settings = {
+    tracks: ["General"],
+    rooms: ["Main Stage"],
+    groupTypes: ["Sponsors", "Exhibitors"],
+    selfServeWorkspace: true,
+  };
+  await env.CALLBOARD_DB.batch([
+    env.CALLBOARD_DB.prepare(
+      `INSERT INTO events (id, slug, name, short_name, timezone, starts_at, ends_at, location, website_url, event_type, theme, settings_json, version, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'Conference', 'Technology', ?10, 1, ?11, ?11)`,
+    ).bind(eventId, slug, name, String(input.shortName || name).trim().slice(0, 80), timezone, startsAt || null, endsAt || null, String(input.location || "").trim() || null, String(input.website || "").trim() || null, JSON.stringify(settings), timestamp),
+    env.CALLBOARD_DB.prepare(
+      "INSERT INTO people (id, event_id, email, name, role, version, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'Organizer', 1, ?5, ?5)",
+    ).bind(personId, eventId, session.email, session.name, timestamp),
+    env.CALLBOARD_DB.prepare(
+      "INSERT INTO event_memberships (event_id, user_id, role, person_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+    ).bind(eventId, session.userId, "organizer", personId, timestamp),
+    env.CALLBOARD_DB.prepare(
+      "INSERT INTO cfp_forms (id, event_id, name, status, schema_json, opens_at, closes_at, version, created_at, updated_at) VALUES (?1, ?2, ?3, 'open', ?4, ?5, ?6, 1, ?7, ?7)",
+    ).bind(formId, eventId, `${name} Call for Speakers`, JSON.stringify(cfpSchema), timestamp, closesAt, timestamp),
+    env.CALLBOARD_DB.prepare(
+      "INSERT INTO evaluation_rounds (id, event_id, name, number, status, blind, criteria_json, version, created_at, updated_at) VALUES (?1, ?2, 'Initial Review', 1, 'active', 1, ?3, 1, ?4, ?4)",
+    ).bind(roundId, eventId, JSON.stringify([{ id: "relevance", label: "Program relevance", weight: 40 }, { id: "originality", label: "Originality", weight: 30 }, { id: "practical", label: "Practical value", weight: 30 }]), timestamp),
+    env.CALLBOARD_DB.prepare(
+      "INSERT INTO schedule_releases (event_id, status, version, updated_at) VALUES (?1, 'draft', 1, ?2)",
+    ).bind(eventId, timestamp),
+    env.CALLBOARD_DB.prepare(
+      "INSERT INTO embeds (id, event_id, name, format, enabled, config_json, version, created_at, updated_at) VALUES (?1, ?2, 'Public schedule', 'Styled HTML', 1, ?3, 1, ?4, ?4)",
+    ).bind(scheduleEmbedId, eventId, JSON.stringify({ type: "Schedule", fields: ["title", "start", "room", "speakers"], layout: "Agenda List", color: "#2f62e9" }), timestamp),
+    env.CALLBOARD_DB.prepare(
+      "INSERT INTO embeds (id, event_id, name, format, enabled, config_json, version, created_at, updated_at) VALUES (?1, ?2, 'Speaker gallery', 'Styled HTML', 1, ?3, 1, ?4, ?4)",
+    ).bind(speakerEmbedId, eventId, JSON.stringify({ type: "Speaker", fields: ["name", "role", "bio"], layout: "Cards", color: "#2f62e9" }), timestamp),
+  ]);
+  const issued = await issueSession(env, { userId: session.userId, eventId, role: "organizer" });
+  return setSessionCookie(
+    json({ item: { id: eventId, slug, name, timezone, startsAt: startsAt || null, endsAt: endsAt || null, formId, scheduleEmbedId, speakerEmbedId }, expiresAt: issued.expiresAt }, { status: 201 }),
+    issued.token,
+  );
+}
+
 async function handleSession(request, env) {
   const dbError = requireDb(env);
   if (dbError) return dbError;
 
   if (request.method === "GET") {
     const authenticated = await authenticate(request, env);
-    if (authenticated.response) return authenticated.response;
-    return json({ authenticated: true, ...authenticated.session });
+    if (!authenticated.response)
+      return json({ authenticated: true, sessionType: "event", ...authenticated.session });
+    const account = await authenticateAccount(request, env);
+    if (account.response) return authenticated.response;
+    return json({
+      authenticated: true,
+      sessionType: "account",
+      role: "account",
+      ...account.session,
+      events: await accountEvents(env, account.session.userId),
+    });
   }
 
   if (request.method === "DELETE") {
     const authenticated = await authenticate(request, env);
-    if (authenticated.response) return authenticated.response;
-    if (authenticated.session.authType === "api_token")
+    const account = await authenticateAccount(request, env);
+    if (authenticated.response && account.response)
+      return authenticated.response;
+    if (!authenticated.response && authenticated.session.authType === "api_token")
       return apiError("BROWSER_SESSION_REQUIRED", 403);
-    await env.CALLBOARD_DB.prepare(
-      "UPDATE auth_sessions SET revoked_at = ?1 WHERE id = ?2",
-    )
-      .bind(now(), authenticated.session.sessionId)
-      .run();
-    return clearSessionCookie(
-      new Response(null, {
-        status: 204,
-        headers: { "cache-control": "no-store" },
-      }),
+    const timestamp = now();
+    const writes = [];
+    if (!authenticated.response)
+      writes.push(
+        env.CALLBOARD_DB.prepare(
+          "UPDATE auth_sessions SET revoked_at = ?1 WHERE id = ?2",
+        ).bind(timestamp, authenticated.session.sessionId),
+      );
+    if (!account.response)
+      writes.push(
+        env.CALLBOARD_DB.prepare(
+          "UPDATE account_sessions SET revoked_at = ?1 WHERE id = ?2",
+        ).bind(timestamp, account.session.sessionId),
+      );
+    if (writes.length) await env.CALLBOARD_DB.batch(writes);
+    return clearAccountCookie(
+      clearSessionCookie(
+        new Response(null, {
+          status: 204,
+          headers: { "cache-control": "no-store" },
+        }),
+      ),
     );
   }
 
@@ -1916,6 +2373,19 @@ async function handleAccessGrants(request, env, session) {
   );
   await env.CALLBOARD_DB.batch(operations);
   await touchWorkspace(env, session.eventId, createdAt);
+  const deliveryRequested = parsed.payload.deliver === true;
+  const deliveryConfigured = Boolean(
+    env.CALLBOARD_IDENTITY_EMAIL_ENABLED === "true" &&
+      env.CALLBOARD_EMAIL_QUEUE &&
+      transactionalEmailConfigured(env),
+  );
+  if (deliveryRequested && deliveryConfigured)
+    await env.CALLBOARD_EMAIL_QUEUE.send({
+      version: 1,
+      type: "role_access_link",
+      grantId,
+      token,
+    });
   const person = await env.CALLBOARD_DB.prepare(
     "SELECT * FROM people WHERE event_id = ?1 AND id = ?2 LIMIT 1",
   ).bind(session.eventId, personId).first();
@@ -1931,6 +2401,11 @@ async function handleAccessGrants(request, env, session) {
       person: decodeRow(person, RESOURCE_SPECS.people),
       matchedExistingIdentity: Boolean(existingPerson),
       expiresAt,
+      deliveryStatus: deliveryRequested
+        ? deliveryConfigured
+          ? "queued"
+          : "unavailable"
+        : "not_requested",
     },
     { status: 201 },
   );
@@ -1989,7 +2464,8 @@ function resolvePublicRouting(schema, answers) {
 async function findPublicForm(env, formId) {
   return env.CALLBOARD_DB.prepare(
     `
-    SELECT f.*, e.slug AS event_slug, e.name AS event_name, e.timezone AS event_timezone
+    SELECT f.*, e.slug AS event_slug, e.name AS event_name, e.timezone AS event_timezone,
+      e.settings_json AS event_settings_json
     FROM cfp_forms f
     JOIN events e ON e.id = f.event_id
     WHERE f.id = ?1 AND lower(f.status) IN ('open', 'published')
@@ -2191,6 +2667,8 @@ async function handlePublicForm(request, env, formId, action) {
     });
 
   const timestamp = now();
+  const eventSettings = parseStoredJson(formRow.event_settings_json, {});
+  const verifiedPortalRequired = eventSettings.selfServeWorkspace === true;
   const authenticatedRequest = requestToken(request)
     ? await authenticate(request, env)
     : null;
@@ -2257,9 +2735,12 @@ async function handlePublicForm(request, env, formId, action) {
   // of submitting the public form; the speaker can use a separate access link later.
   const preserveExistingSession = Boolean(authenticatedRequest?.session);
   const instantPortalAccess =
-    !participantRows[0].existing && !preserveExistingSession;
+    !verifiedPortalRequired &&
+    !participantRows[0].existing &&
+    !preserveExistingSession;
   let portalSession = null;
   let portalUserId = null;
+  let portalGrant = null;
   participantRows.forEach((participant, index) => {
     if (!participant.existing) {
       const input = participants[index];
@@ -2339,6 +2820,47 @@ async function handlePublicForm(request, env, formId, action) {
         portalUserId,
         formRow.event_id,
         portalSession.expiresAt,
+        timestamp,
+      ),
+    );
+  }
+  if (verifiedPortalRequired && !verifiedExistingPrimary) {
+    const organizer = await env.CALLBOARD_DB.prepare(
+      "SELECT user_id FROM event_memberships WHERE event_id = ?1 AND role = 'organizer' ORDER BY created_at ASC LIMIT 1",
+    )
+      .bind(formRow.event_id)
+      .first();
+    if (!organizer) return apiError("ORGANIZER_NOT_INITIALIZED", 409);
+    const existingUser = await env.CALLBOARD_DB.prepare(
+      "SELECT id FROM users WHERE email = ?1 COLLATE NOCASE LIMIT 1",
+    )
+      .bind(email)
+      .first();
+    portalUserId = existingUser?.id || id("user");
+    if (!existingUser)
+      operations.push(
+        env.CALLBOARD_DB.prepare(
+          "INSERT INTO users (id, email, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+        ).bind(portalUserId, email, participants[0].name, timestamp),
+      );
+    portalGrant = {
+      id: id("grant"),
+      token: randomToken(),
+      expiresAt: futureIso(GRANT_TTL_SECONDS),
+    };
+    operations.push(
+      env.CALLBOARD_DB.prepare(
+        `INSERT INTO access_grants (id, grant_hash, event_id, email, name, role, person_id, expires_at, created_by, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'speaker', ?6, ?7, ?8, ?9)`,
+      ).bind(
+        portalGrant.id,
+        await sha256(portalGrant.token),
+        formRow.event_id,
+        email,
+        participants[0].name,
+        participantRows[0].id,
+        portalGrant.expiresAt,
+        organizer.user_id,
         timestamp,
       ),
     );
@@ -2432,6 +2954,19 @@ async function handlePublicForm(request, env, formId, action) {
     return json({ item: existing, replayed: true });
   }
   await touchWorkspace(env, formRow.event_id, timestamp);
+  const portalDeliveryConfigured = Boolean(
+    portalGrant &&
+      env.CALLBOARD_IDENTITY_EMAIL_ENABLED === "true" &&
+      env.CALLBOARD_EMAIL_QUEUE &&
+      transactionalEmailConfigured(env),
+  );
+  if (portalDeliveryConfigured)
+    await env.CALLBOARD_EMAIL_QUEUE.send({
+      version: 1,
+      type: "role_access_link",
+      grantId: portalGrant.id,
+      token: portalGrant.token,
+    });
   const created = await publicSubmissionPayload(
     env,
     formRow.event_id,
@@ -2444,12 +2979,22 @@ async function handlePublicForm(request, env, formId, action) {
         personId: participantRows[0].id,
         expiresAt: portalSession?.expiresAt || verifiedSpeaker.expiresAt,
       }
-    : {
+    : portalGrant
+      ? {
+          authenticated: false,
+          reason: "EMAIL_VERIFICATION_REQUIRED",
+          expiresAt: portalGrant.expiresAt,
+          deliveryStatus: portalDeliveryConfigured ? "queued" : "unavailable",
+          ...(env.CALLBOARD_SELF_SERVE_DEV_LINKS === "true"
+            ? { developmentAccessPath: `/#/access/${encodeURIComponent(portalGrant.token)}` }
+            : {}),
+        }
+      : {
         authenticated: false,
         reason: preserveExistingSession
           ? "EXISTING_SESSION_PRESERVED"
           : "EMAIL_VERIFICATION_REQUIRED",
-      };
+        };
   const response = json(
     { item: created, replayed: false, portalAccess },
     { status: 201 },
@@ -4179,10 +4724,130 @@ async function deliverApprovedCommunication(env, message) {
   }
 }
 
+async function deliverOrganizerMagicLink(env, message) {
+  if (
+    !env.CALLBOARD_DB ||
+    env.CALLBOARD_SELF_SERVE_EMAIL_ENABLED !== "true" ||
+    !transactionalEmailConfigured(env)
+  )
+    return { retry: true, delaySeconds: 60 };
+  const body = message?.body;
+  if (
+    !body ||
+    body.version !== 1 ||
+    body.type !== "organizer_magic_link" ||
+    !body.challengeId ||
+    !body.token
+  )
+    return { final: true };
+  const challenge = await env.CALLBOARD_DB.prepare(
+    `SELECT id, email, name, expires_at, used_at, delivery_status
+     FROM organizer_login_challenges
+     WHERE id = ?1 AND token_hash = ?2
+     LIMIT 1`,
+  )
+    .bind(body.challengeId, await sha256(body.token))
+    .first();
+  if (!challenge || challenge.used_at || challenge.expires_at <= now())
+    return { final: true };
+  if (challenge.delivery_status === "delivered") return { final: true };
+  const origin = String(env.CALLBOARD_PUBLIC_ORIGIN || "").replace(/\/$/, "");
+  if (!origin) return { retry: true, delaySeconds: 60 };
+  const senderEmail = String(env.CALLBOARD_AUTH_SENDER_EMAIL || COMMUNICATIONS_SENDER)
+    .trim()
+    .toLowerCase();
+  const firstName = String(challenge.name || challenge.email.split("@")[0]).trim().split(/\s+/)[0];
+  const accessUrl = `${origin}/#/organizer-access/${encodeURIComponent(body.token)}`;
+  try {
+    const result = await sendTransactionalEmail({
+      env,
+      exactPayload: {
+        from: { name: "OpenCallboard", email: senderEmail },
+        replyTo: { name: "OpenCallboard", email: senderEmail },
+        to: [{ name: challenge.name || challenge.email, email: challenge.email }],
+        subject: "Sign in to OpenCallboard",
+        text: `Hi ${firstName},\n\nUse this private link to sign in to OpenCallboard. It expires in 15 minutes and can be used once.\n\n${accessUrl}\n\nIf you did not request this link, you can ignore this email.`,
+      },
+      idempotencyKey: challenge.id,
+      providerFetch: env.CALLBOARD_PROVIDER_FETCH || fetch,
+      sentAt: new Date(),
+    });
+    await env.CALLBOARD_DB.prepare(
+      "UPDATE organizer_login_challenges SET delivery_status = 'delivered', provider_message_id = ?1 WHERE id = ?2 AND used_at IS NULL",
+    )
+      .bind(result.messageId, challenge.id)
+      .run();
+    return { final: true, sent: true };
+  } catch (error) {
+    const providerErrorCode = String(error?.code || "UNKNOWN").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 120);
+    console.error("Organizer magic-link delivery failed", providerErrorCode);
+    await env.CALLBOARD_DB.prepare(
+      "UPDATE organizer_login_challenges SET delivery_status = 'retrying' WHERE id = ?1 AND used_at IS NULL",
+    )
+      .bind(challenge.id)
+      .run();
+    return { retry: true, delaySeconds: 60 };
+  }
+}
+
+async function deliverRoleAccessLink(env, message) {
+  if (
+    !env.CALLBOARD_DB ||
+    env.CALLBOARD_IDENTITY_EMAIL_ENABLED !== "true" ||
+    !transactionalEmailConfigured(env)
+  )
+    return { retry: true, delaySeconds: 60 };
+  const body = message?.body;
+  if (
+    !body ||
+    body.version !== 1 ||
+    body.type !== "role_access_link" ||
+    !body.grantId ||
+    !body.token
+  )
+    return { final: true };
+  const grant = await env.CALLBOARD_DB.prepare(
+    `SELECT g.id, g.email, g.name, g.role, g.expires_at, g.used_at, e.name AS event_name
+     FROM access_grants g JOIN events e ON e.id = g.event_id
+     WHERE g.id = ?1 AND g.grant_hash = ?2 LIMIT 1`,
+  )
+    .bind(body.grantId, await sha256(body.token))
+    .first();
+  if (!grant || grant.used_at || grant.expires_at <= now()) return { final: true };
+  const origin = String(env.CALLBOARD_PUBLIC_ORIGIN || "").replace(/\/$/, "");
+  if (!origin) return { retry: true, delaySeconds: 60 };
+  const senderEmail = String(env.CALLBOARD_AUTH_SENDER_EMAIL || COMMUNICATIONS_SENDER).trim().toLowerCase();
+  const firstName = String(grant.name || grant.email).trim().split(/\s+/)[0];
+  const accessUrl = `${origin}/#/access/${encodeURIComponent(body.token)}`;
+  try {
+    await sendTransactionalEmail({
+      env,
+      exactPayload: {
+        from: { name: grant.event_name, email: senderEmail },
+        replyTo: { name: grant.event_name, email: senderEmail },
+        to: [{ name: grant.name || grant.email, email: grant.email }],
+        subject: `${grant.event_name}: your private ${grant.role} access`,
+        text: `Hi ${firstName},\n\nUse this private one-time link to open your ${grant.role} workspace for ${grant.event_name}. It expires in 24 hours.\n\n${accessUrl}\n\nIf you were not expecting this invitation, you can ignore this email.`,
+      },
+      idempotencyKey: grant.id,
+      providerFetch: env.CALLBOARD_PROVIDER_FETCH || fetch,
+      sentAt: new Date(),
+    });
+    return { final: true, sent: true };
+  } catch (error) {
+    console.error("Role access-link delivery failed", String(error?.code || "UNKNOWN"));
+    return { retry: true, delaySeconds: 60 };
+  }
+}
+
 async function handleCommunicationQueue(batch, env) {
   for (const message of batch.messages || []) {
     try {
-      const result = await deliverApprovedCommunication(env, message);
+      const result = message?.body?.type === "organizer_magic_link"
+        ? await deliverOrganizerMagicLink(env, message)
+        : message?.body?.type === "role_access_link"
+          ? await deliverRoleAccessLink(env, message)
+          : await deliverApprovedCommunication(env, message);
       if (result.retry)
         message.retry?.({ delaySeconds: result.delaySeconds || 60 });
       else message.ack?.();
@@ -6998,6 +7663,17 @@ async function handleApi(request, env, url) {
       return handleSession(request, env);
     if (url.pathname === "/api/session/organizer" && request.method === "POST")
       return handleOrganizerSession(request, env);
+    if (url.pathname === "/api/auth/organizer/request" && request.method === "POST")
+      return handleOrganizerLoginRequest(request, env);
+    if (url.pathname === "/api/auth/organizer/redeem" && request.method === "POST")
+      return handleOrganizerLoginRedeem(request, env);
+    if (
+      (url.pathname === "/api/account" ||
+        url.pathname === "/api/account/events" ||
+        /^\/api\/account\/events\/[^/]+\/select$/.test(url.pathname)) &&
+      ["GET", "POST"].includes(request.method)
+    )
+      return handleAccount(request, env, url);
 
     const publicFormMatch = url.pathname.match(
       /^\/api\/public\/forms\/([^/]+)(?:\/(submissions|drafts)(?:\/([^/]+))?)?$/,
