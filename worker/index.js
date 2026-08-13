@@ -862,19 +862,17 @@ async function handleHealth(request, env) {
     emailDeliveryConfigured: Boolean(
       env.CALLBOARD_EMAIL_RELEASE_ENABLED === "true" &&
       env.CALLBOARD_EMAIL_QUEUE &&
-      env.CALLBOARD_EMAIL_RELEASE_KEY &&
-      syntheticGmailConfigured({
-        credentialsJson: env.CALLBOARD_GMAIL_CREDENTIALS,
-      }),
+      transactionalEmailConfigured(env),
     ),
     emailUiReleaseConfigured: Boolean(
       env.CALLBOARD_EMAIL_UI_RELEASE_ENABLED === "true" &&
       env.CALLBOARD_EMAIL_RELEASE_ENABLED === "true" &&
       env.CALLBOARD_EMAIL_QUEUE &&
-      syntheticGmailConfigured({
-        credentialsJson: env.CALLBOARD_GMAIL_CREDENTIALS,
-      }),
+      transactionalEmailConfigured(env),
     ),
+    emailSender: transactionalEmailConfigured(env)
+      ? String(env.CALLBOARD_AUTH_SENDER_EMAIL || "").trim() || null
+      : null,
     reminderAutomationConfigured: Boolean(
       env.CALLBOARD_DB &&
       env.CALLBOARD_WRITE_ENABLED === "true" &&
@@ -883,7 +881,7 @@ async function handleHealth(request, env) {
     airtableSyncConfigured: Boolean(
       env.AIRTABLE_REAL_SYNC_ENABLED === "true" && env.AIRTABLE_API_TOKEN,
     ),
-    expectedSchemaVersion: 20,
+    expectedSchemaVersion: 21,
     timestamp: now(),
   };
   return request.method === "HEAD"
@@ -3744,6 +3742,83 @@ function validatePreviewOnlyCommunication(payload) {
   };
 }
 
+async function validateEventMemberCommunication(payload, env, eventId) {
+  const exact = payload.exactPayload;
+  const action = String(payload.action || exact?.action || "").trim().toLowerCase();
+  const templateName = String(payload.templateName || "").trim();
+  const segment = String(payload.segment || "").trim();
+  if (!payload.idempotencyKey || !String(payload.idempotencyKey).trim())
+    return { error: apiError("IDEMPOTENCY_KEY_REQUIRED", 400) };
+  if (!["send", "automation"].includes(action)) return { error: apiError("LIVE_SEND_ONLY", 400) };
+  if (!templateName || !segment)
+    return { error: apiError("COMMUNICATION_METADATA_REQUIRED", 400) };
+  if (!exact || typeof exact !== "object" || Array.isArray(exact))
+    return { error: apiError("EXACT_PAYLOAD_REQUIRED", 400) };
+  if (String(exact.action || "").trim().toLowerCase() !== action)
+    return { error: apiError("COMMUNICATION_ACTION_MISMATCH", 400) };
+  if (
+    exact.releaseMode !== "event-members" ||
+    exact.deliveryMode !== "live" ||
+    exact.networkIntent !== true
+  )
+    return { error: apiError("LIVE_EVENT_MEMBER_DELIVERY_REQUIRED", 400) };
+  const sender = normalizeMailbox(env.CALLBOARD_AUTH_SENDER_EMAIL);
+  if (!sender || normalizeMailbox(exact.from?.email) !== sender || normalizeMailbox(exact.replyTo?.email) !== sender)
+    return { error: apiError("CONFIGURED_SENDER_REQUIRED", 400) };
+  if (!Array.isArray(exact.to) || exact.to.length !== 1)
+    return { error: apiError("EXACTLY_ONE_RECIPIENT_REQUIRED", 400) };
+  const recipient = exact.to[0];
+  const recipientEmail = normalizeMailbox(recipient?.email);
+  const person = await env.CALLBOARD_DB.prepare(
+    "SELECT id, email, name, role FROM people WHERE event_id = ?1 AND id = ?2 AND lower(email) = ?3 LIMIT 1",
+  ).bind(eventId, String(recipient?.id || ""), recipientEmail).first();
+  if (!person) return { error: apiError("RECIPIENT_NOT_EVENT_MEMBER", 403) };
+  if (String(person.role || "").toLowerCase() !== String(recipient?.role || "").toLowerCase())
+    return { error: apiError("RECIPIENT_ROLE_MISMATCH", 400) };
+  if (
+    exact.safety?.recipientAllowlistEnforced !== true ||
+    exact.safety?.outboundEnabled !== true
+  )
+    return { error: apiError("LIVE_DELIVERY_SAFETY_REQUIRED", 400) };
+  const subject = String(exact.subject || "");
+  const text = String(exact.text || "");
+  if (!subject.trim() || !text.trim()) return { error: apiError("COMMUNICATION_CONTENT_REQUIRED", 400) };
+  if (subject.length > 998 || text.length > 100_000)
+    return { error: apiError("COMMUNICATION_CONTENT_TOO_LARGE", 413) };
+  if (/{{\s*[a-z0-9_]+\s*}}/i.test(`${subject}\n${text}`))
+    return { error: apiError("UNRESOLVED_MERGE_FIELD", 400) };
+  if (exact.scheduledFor) return { error: apiError("LIVE_SCHEDULING_NOT_ENABLED", 400) };
+  let calendar = null;
+  if (exact.calendar != null) {
+    const candidate = exact.calendar;
+    const method = String(candidate.method || "").toUpperCase();
+    const status = String(candidate.status || "").toUpperCase();
+    const sequence = Number(candidate.sequence);
+    if (!String(candidate.uid || "").trim() || !["REQUEST", "CANCEL"].includes(method) || !Number.isInteger(sequence) || sequence < 0)
+      return { error: apiError("INVALID_CALENDAR_METADATA", 400) };
+    if (status !== (method === "CANCEL" ? "CANCELLED" : "CONFIRMED"))
+      return { error: apiError("INVALID_CALENDAR_STATUS", 400) };
+    if (!Number.isFinite(Date.parse(candidate.start || "")) || !Number.isFinite(Date.parse(candidate.end || "")) || Date.parse(candidate.end) <= Date.parse(candidate.start))
+      return { error: apiError("INVALID_CALENDAR_RANGE", 400) };
+    calendar = { uid: String(candidate.uid), method, sequence, status, start: candidate.start, end: candidate.end, location: String(candidate.location || "") };
+  }
+  return {
+    value: {
+      idempotencyKey: String(payload.idempotencyKey).trim(), action,
+      templateId: payload.templateId ? String(payload.templateId) : null,
+      templateName, segment,
+      recipient: { id: person.id, role: person.role, name: person.name, email: person.email },
+      subject, text, scheduledFor: null, calendar, exact, live: true,
+    },
+  };
+}
+
+async function validateCommunication(payload, env, eventId) {
+  return payload?.exactPayload?.releaseMode === "event-members"
+    ? validateEventMemberCommunication(payload, env, eventId)
+    : validatePreviewOnlyCommunication(payload);
+}
+
 async function handleCommunicationOutbox(
   request,
   env,
@@ -3802,7 +3877,7 @@ async function handleCommunicationOutbox(
   if (writeError) return writeError;
   const parsed = await parseJson(request);
   if (parsed.error) return apiError(parsed.error, parsed.status);
-  const validation = validatePreviewOnlyCommunication(parsed.payload);
+  const validation = await validateCommunication(parsed.payload, env, session.eventId);
   if (validation.error) return validation.error;
   const input = validation.value;
   const exactPayloadJson = JSON.stringify(input.exact);
@@ -3827,8 +3902,9 @@ async function handleCommunicationOutbox(
   const timestamp = now();
   const outboxIdNew = id("communication_outbox");
   const attemptId = id("communication_attempt");
-  const status =
-    input.action === "send" ? "prepared_preview" : "scheduled_preview";
+  const status = input.live
+    ? "prepared_live"
+    : input.action === "send" ? "prepared_preview" : "scheduled_preview";
   const operations = [
     env.CALLBOARD_DB.prepare(
       `
@@ -3855,9 +3931,9 @@ async function handleCommunicationOutbox(
     env.CALLBOARD_DB.prepare(
       `
       INSERT INTO communication_delivery_attempts (id, event_id, outbox_id, attempt_number, mode, status, provider, finished_at, created_at)
-      VALUES (?1, ?2, ?3, 0, 'preview', 'not_dispatched', 'none', ?4, ?4)
+      VALUES (?1, ?2, ?3, 0, ?4, 'not_dispatched', 'none', ?5, ?5)
     `,
-    ).bind(attemptId, session.eventId, outboxIdNew, timestamp),
+    ).bind(attemptId, session.eventId, outboxIdNew, input.live ? "live" : "preview", timestamp),
   ];
   if (input.calendar)
     operations.push(
@@ -3898,7 +3974,7 @@ async function handleCommunicationOutbox(
     attempt: {
       id: attemptId,
       attemptNumber: 0,
-      mode: "preview",
+      mode: input.live ? "live" : "preview",
       status: "not_dispatched",
       provider: "none",
       finishedAt: timestamp,
@@ -3983,7 +4059,7 @@ async function reminderSource(env, event, reminder) {
   if (reminder.unit === "days before task due") {
     sourceType = "task";
     const task = await env.CALLBOARD_DB.prepare(
-      "SELECT id, due_at FROM tasks WHERE event_id = ?1 AND due_at IS NOT NULL AND lower(status) NOT IN ('complete', 'completed', 'done') ORDER BY due_at, id LIMIT 1",
+      "SELECT id, title, due_at FROM tasks WHERE event_id = ?1 AND due_at IS NOT NULL AND lower(status) NOT IN ('complete', 'completed', 'done') ORDER BY due_at, id LIMIT 1",
     )
       .bind(event.id)
       .first();
@@ -3992,7 +4068,7 @@ async function reminderSource(env, event, reminder) {
   } else if (reminder.unit === "hours before session") {
     sourceType = "session";
     session = await env.CALLBOARD_DB.prepare(
-      "SELECT id, starts_at, ends_at FROM agenda_sessions WHERE event_id = ?1 AND starts_at IS NOT NULL AND lower(status) = 'accepted' ORDER BY starts_at, id LIMIT 1",
+      "SELECT id, title, room, starts_at, ends_at FROM agenda_sessions WHERE event_id = ?1 AND starts_at IS NOT NULL AND lower(status) = 'accepted' ORDER BY starts_at, id LIMIT 1",
     )
       .bind(event.id)
       .first();
@@ -4013,7 +4089,118 @@ async function reminderSource(env, event, reminder) {
     sourceId,
     dueAt: new Date(baseTime - milliseconds).toISOString(),
     session,
+    task: reminder.unit === "days before task due" ? await env.CALLBOARD_DB.prepare("SELECT id, title, due_at FROM tasks WHERE event_id = ?1 AND id = ?2 LIMIT 1").bind(event.id, sourceId).first() : null,
   };
+}
+
+async function reminderRecipients(env, eventId, segment) {
+  let sql;
+  let status = null;
+  if (segment === "accepted-speakers") {
+    sql = "SELECT DISTINCT p.id, p.name, p.email, p.role FROM people p JOIN session_people sp ON sp.event_id = p.event_id AND sp.person_id = p.id JOIN agenda_sessions s ON s.event_id = sp.event_id AND s.id = sp.session_id WHERE p.event_id = ?1 AND lower(s.status) = 'accepted' ORDER BY lower(p.email)";
+  } else if (segment === "incomplete-tasks") {
+    sql = "SELECT DISTINCT p.id, p.name, p.email, p.role FROM people p JOIN tasks t ON t.event_id = p.event_id AND t.assignee_person_id = p.id WHERE p.event_id = ?1 AND lower(t.status) NOT IN ('complete', 'completed', 'done') ORDER BY lower(p.email)";
+  } else if (["pending-submitters", "declined-submitters"].includes(segment)) {
+    status = segment === "pending-submitters" ? "pending" : "declined";
+    sql = `SELECT DISTINCT p.id, p.name, p.email, p.role FROM people p JOIN (
+      SELECT submitter_person_id AS person_id FROM submissions WHERE event_id = ?1 AND lower(status) = ?2 AND submitter_person_id IS NOT NULL
+      UNION SELECT sp.person_id FROM submissions s JOIN submission_people sp ON sp.event_id = s.event_id AND sp.submission_id = s.id WHERE s.event_id = ?1 AND lower(s.status) = ?2
+    ) x ON x.person_id = p.id WHERE p.event_id = ?1 ORDER BY lower(p.email)`;
+  } else {
+    sql = "SELECT id, name, email, role FROM people WHERE event_id = ?1 AND lower(role) IN ('speaker', 'contact') ORDER BY lower(email)";
+  }
+  const statement = env.CALLBOARD_DB.prepare(sql);
+  const rows = status ? await statement.bind(eventId, status).all() : await statement.bind(eventId).all();
+  return (rows.results || []).slice(0, 100);
+}
+
+function renderLiveReminderText(value, event, person, source, origin) {
+  const context = {
+    first_name: String(person.name || "Speaker").trim().split(/\s+/)[0],
+    full_name: person.name || "Speaker",
+    event_name: event.name || "the event",
+    event_dates: [event.starts_at, event.ends_at].filter(Boolean).join(" - "),
+    event_location: event.location || "To be announced",
+    portal_url: `${String(origin || "").replace(/\/$/, "")}/#/speaker-portal`,
+    session_title: source.session?.title || "Your session",
+    session_start: source.session?.starts_at || "To be announced",
+    session_location: source.session?.room || event.location || "To be announced",
+    task_title: source.task?.title || "Speaker task",
+    task_due_date: source.task?.due_at || "the listed deadline",
+    submission_title: "Your submission",
+    submission_status: "Pending",
+  };
+  return String(value || "").replace(/{{\s*([a-z0-9_]+)\s*}}/gi, (_, key) => context[key] ?? "");
+}
+
+async function materializeLiveReminder(env, event, reminder, source, template, evaluatedAt, matchedRecipientCount) {
+  const automationKey = `${reminder.id}:${source.dueAt}`;
+  const dailyCap = Math.min(Math.max(Number(env.CALLBOARD_EMAIL_DAILY_CAP || 500), 1), 1000);
+  const since = new Date(Date.parse(evaluatedAt) - 24 * 60 * 60 * 1000).toISOString();
+  const recent = await env.CALLBOARD_DB.prepare(
+    "SELECT COUNT(*) AS count FROM communication_outbox WHERE event_id = ?1 AND created_at >= ?2 AND status IN ('queued_for_delivery', 'dispatching', 'sent')",
+  ).bind(event.id, since).first();
+  const remaining = Math.max(0, dailyCap - Number(recent?.count || 0));
+  const recipients = (await reminderRecipients(env, event.id, reminder.segment)).slice(0, remaining);
+  if (!recipients.length)
+    return { blockedCode: remaining ? "REMINDER_RECIPIENT_SCOPE_EMPTY" : "REMINDER_DAILY_CAP_REACHED" };
+  const organizer = await env.CALLBOARD_DB.prepare(
+    "SELECT user_id FROM event_memberships WHERE event_id = ?1 AND role = 'organizer' ORDER BY created_at LIMIT 1",
+  ).bind(event.id).first();
+  if (!organizer || !env.CALLBOARD_EMAIL_QUEUE || !transactionalEmailConfigured(env))
+    return { blockedCode: "REMINDER_DELIVERY_NOT_CONFIGURED" };
+  const senderEmail = normalizeMailbox(env.CALLBOARD_AUTH_SENDER_EMAIL);
+  let firstOutboxId = null;
+  let queued = 0;
+  for (const person of recipients) {
+    const idempotencyKey = `${automationKey}:${person.id}`;
+    const existing = await env.CALLBOARD_DB.prepare(
+      "SELECT id FROM communication_outbox WHERE event_id = ?1 AND idempotency_key = ?2 LIMIT 1",
+    ).bind(event.id, idempotencyKey).first();
+    if (existing) { firstOutboxId ||= existing.id; continue; }
+    const attachCalendar = Boolean(template.attachCalendar && source.session?.starts_at);
+    const exact = {
+      schemaVersion: 1, releaseMode: "event-members", deliveryMode: "live", networkIntent: true,
+      action: "automation",
+      from: { name: event.name || "OpenCallboard", email: senderEmail },
+      replyTo: { name: event.name || "OpenCallboard", email: senderEmail },
+      to: [{ id: person.id, role: person.role || "Speaker", name: person.name, email: person.email }],
+      subject: renderLiveReminderText(template.subject, event, person, source, env.CALLBOARD_PUBLIC_ORIGIN),
+      text: renderLiveReminderText(template.body, event, person, source, env.CALLBOARD_PUBLIC_ORIGIN),
+      scheduledFor: null,
+      attachments: attachCalendar ? [{ kind: "calendar", filename: "opencallboard-session.ics", contentDisposition: "attachment", previewOnly: false }] : [],
+      safety: { recipientAllowlistEnforced: true, outboundEnabled: true },
+      ...(attachCalendar ? { calendar: { uid: `${source.sourceId}@opencallboard.com`, method: "REQUEST", sequence: 0, status: "CONFIRMED", start: source.session.starts_at, end: source.session.ends_at || new Date(Date.parse(source.session.starts_at) + 60 * 60 * 1000).toISOString(), location: source.session.room || event.location || "" } } : {}),
+    };
+    const validation = await validateEventMemberCommunication({ idempotencyKey, action: "automation", templateId: template.id, templateName: template.name, segment: reminder.segment, exactPayload: exact }, env, event.id);
+    if (validation.error) continue;
+    const timestamp = evaluatedAt;
+    const outboxId = id("communication_outbox");
+    const attemptId = id("communication_attempt");
+    const approvalId = id("communication_release");
+    const approvalToken = `cbr_${randomToken()}`;
+    const exactJson = JSON.stringify(exact);
+    const exactHash = await sha256(exactJson);
+    await env.CALLBOARD_DB.batch([
+      env.CALLBOARD_DB.prepare("INSERT INTO communication_outbox (id,event_id,idempotency_key,action,status,template_id,template_name,segment,recipients_json,subject,body,scheduled_for,calendar_json,exact_payload_json,provider,attempt_count,version,created_at,updated_at) VALUES (?1,?2,?3,'automation','queued_for_delivery',?4,?5,?6,?7,?8,?9,NULL,?10,?11,'ses',0,1,?12,?12)").bind(outboxId,event.id,idempotencyKey,template.id,template.name,reminder.segment,JSON.stringify(exact.to),exact.subject,exact.text,exact.calendar ? JSON.stringify(exact.calendar) : null,exactJson,timestamp),
+      env.CALLBOARD_DB.prepare("INSERT INTO communication_delivery_attempts (id,event_id,outbox_id,attempt_number,mode,status,provider,finished_at,created_at) VALUES (?1,?2,?3,0,'live','not_dispatched','none',?4,?4)").bind(attemptId,event.id,outboxId,timestamp),
+      env.CALLBOARD_DB.prepare("INSERT INTO communication_release_approvals (id,event_id,outbox_id,approval_hash,active_slot,exact_payload_hash,sender_email,recipient_email,status,expires_at,enqueued_at,created_by_user_id,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'queued',?9,?10,?11,?10,?10)").bind(approvalId,event.id,outboxId,await sha256(approvalToken),`${event.id}:${outboxId}`,exactHash,senderEmail,normalizeMailbox(person.email),new Date(Date.parse(timestamp)+60*60*1000).toISOString(),timestamp,organizer.user_id),
+    ]);
+    try {
+      await env.CALLBOARD_EMAIL_QUEUE.send({ version: 1, approvalId, approvalToken, eventId: event.id, outboxId });
+      queued += 1;
+      firstOutboxId ||= outboxId;
+    } catch {
+      await env.CALLBOARD_DB.batch([
+        env.CALLBOARD_DB.prepare("UPDATE communication_release_approvals SET status='failed',active_slot=NULL,used_at=?1,updated_at=?1 WHERE id=?2").bind(now(),approvalId),
+        env.CALLBOARD_DB.prepare("UPDATE communication_outbox SET status='failed',last_error='EMAIL_QUEUE_ENQUEUE_FAILED',updated_at=?1 WHERE id=?2").bind(now(),outboxId),
+      ]);
+    }
+  }
+  const runId = id("communication_reminder_run");
+  await env.CALLBOARD_DB.prepare("INSERT INTO communication_reminder_runs (id,event_id,reminder_id,automation_key,source_type,source_id,evaluated_at,due_at,status,matched_recipient_count,outbox_id,network_intent,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,1,?7)").bind(runId,event.id,reminder.id,automationKey,source.sourceType,source.sourceId,evaluatedAt,source.dueAt,queued ? "queued_live" : "failed_delivery",matchedRecipientCount,firstOutboxId).run();
+  const run = await env.CALLBOARD_DB.prepare("SELECT * FROM communication_reminder_runs WHERE id=?1").bind(runId).first();
+  return { item: communicationReminderRunPayload(run), replayed: false };
 }
 
 async function reminderMatchedRecipientCount(env, eventId, segment) {
@@ -4200,6 +4387,18 @@ async function materializeDueReminder(
       status: "blocked_template",
       matchedRecipientCount,
       errorCode: "REMINDER_TEMPLATE_NOT_FOUND",
+    });
+    return { item: communicationReminderRunPayload(run), replayed: false };
+  }
+  if (env.CALLBOARD_REMINDER_LIVE_DELIVERY_ENABLED === "true") {
+    const live = await materializeLiveReminder(
+      env, event, reminder, source, template, evaluatedAt, matchedRecipientCount,
+    );
+    if (live?.item) return live;
+    const run = await recordReminderRun(env, {
+      eventId: event.id, reminder, automationKey, source, evaluatedAt,
+      status: "blocked_delivery", matchedRecipientCount,
+      errorCode: live?.blockedCode || "REMINDER_DELIVERY_NOT_CONFIGURED",
     });
     return { item: communicationReminderRunPayload(run), replayed: false };
   }
@@ -4421,16 +4620,16 @@ function communicationReleasePayload(row) {
   };
 }
 
-function validateStoredCommunicationOutbox(row) {
+async function validateStoredCommunicationOutbox(row, env, eventId) {
   const exactPayload = parseStoredJson(row.exact_payload_json, null);
-  const validation = validatePreviewOnlyCommunication({
+  const validation = await validateCommunication({
     idempotencyKey: row.idempotency_key,
     action: row.action,
     templateId: row.template_id,
     templateName: row.template_name,
     segment: row.segment,
     exactPayload,
-  });
+  }, env, eventId);
   return validation.error
     ? validation
     : { value: { ...validation.value, exactPayload } };
@@ -4451,10 +4650,7 @@ async function handleCommunicationReleaseApproval(
     return apiError("EMAIL_RELEASE_DISABLED", 403);
   if (
     !env.CALLBOARD_EMAIL_QUEUE ||
-    !env.CALLBOARD_EMAIL_RELEASE_KEY ||
-    !syntheticGmailConfigured({
-      credentialsJson: env.CALLBOARD_GMAIL_CREDENTIALS,
-    })
+    !transactionalEmailConfigured(env)
   )
     return apiError("EMAIL_RELEASE_NOT_CONFIGURED", 503);
   const parsed = await parseJson(request);
@@ -4472,7 +4668,7 @@ async function handleCommunicationReleaseApproval(
   const operatorRelease = operatorRequested;
   const uiRelease =
     env.CALLBOARD_EMAIL_UI_RELEASE_ENABLED === "true" &&
-    parsed.payload.confirm === "release-one-synthetic-email-from-ui";
+    ["release-one-synthetic-email-from-ui", "release-one-event-member-email-from-ui"].includes(parsed.payload.confirm);
   if (!operatorRelease && !uiRelease)
     return apiError("EMAIL_RELEASE_CONFIRMATION_REQUIRED", 428);
   const row = await env.CALLBOARD_DB.prepare(
@@ -4483,15 +4679,24 @@ async function handleCommunicationReleaseApproval(
   if (!row) return apiError("NOT_FOUND", 404);
   // A provider failure can be ambiguous. Require an operator to prepare a fresh
   // outbox rather than re-releasing the same payload and risking a duplicate.
-  if (row.status !== "prepared_preview")
+  if (!["prepared_preview", "prepared_live"].includes(row.status))
     return apiError("OUTBOX_NOT_RELEASEABLE", 409, { status: row.status });
-  const validation = validateStoredCommunicationOutbox(row);
+  const validation = await validateStoredCommunicationOutbox(row, env, session.eventId);
   if (validation.error) return validation.error;
   const input = validation.value;
-  if (normalizeMailbox(input.recipient.email) !== COMMUNICATIONS_FIRST_CANARY)
+  if (!input.live && normalizeMailbox(input.recipient.email) !== COMMUNICATIONS_FIRST_CANARY)
     return apiError("FIRST_CANARY_RECIPIENT_REQUIRED", 403, {
       recipient: COMMUNICATIONS_FIRST_CANARY,
     });
+  if (input.live) {
+    const dailyCap = Math.min(Math.max(Number(env.CALLBOARD_EMAIL_DAILY_CAP || 500), 1), 1000);
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const recent = await env.CALLBOARD_DB.prepare(
+      "SELECT COUNT(*) AS count FROM communication_outbox WHERE event_id = ?1 AND created_at >= ?2 AND status IN ('queued_for_delivery', 'dispatching', 'sent')",
+    ).bind(session.eventId, since).first();
+    if (Number(recent?.count || 0) >= dailyCap)
+      return apiError("EVENT_EMAIL_DAILY_CAP_REACHED", 429, { dailyCap });
+  }
   const exactPayloadHash = await sha256(row.exact_payload_json);
   if (
     operatorRelease &&
@@ -4527,8 +4732,8 @@ async function handleCommunicationReleaseApproval(
         await sha256(approvalToken),
         `${session.eventId}:${outboxId}`,
         exactPayloadHash,
-        COMMUNICATIONS_SENDER,
-        COMMUNICATIONS_FIRST_CANARY,
+        normalizeMailbox(input.exactPayload.from?.email),
+        normalizeMailbox(input.recipient.email),
         expiresAt,
         session.userId,
         timestamp,
@@ -4559,8 +4764,8 @@ async function handleCommunicationReleaseApproval(
       "UPDATE communication_release_approvals SET status = 'queued', enqueued_at = ?1, updated_at = ?1 WHERE id = ?2 AND status = 'pending_enqueue'",
     ).bind(enqueuedAt, approvalId),
     env.CALLBOARD_DB.prepare(
-      "UPDATE communication_outbox SET status = 'queued_for_test_delivery', provider = 'gmail', last_error = NULL, version = version + 1, updated_at = ?1 WHERE event_id = ?2 AND id = ?3",
-    ).bind(enqueuedAt, session.eventId, outboxId),
+      `UPDATE communication_outbox SET status = ?1, provider = ?2, last_error = NULL, version = version + 1, updated_at = ?3 WHERE event_id = ?4 AND id = ?5`,
+    ).bind(input.live ? "queued_for_delivery" : "queued_for_test_delivery", input.live ? "ses" : "gmail", enqueuedAt, session.eventId, outboxId),
     env.CALLBOARD_DB.prepare(
       "UPDATE events SET updated_at = ?1 WHERE id = ?2",
     ).bind(enqueuedAt, session.eventId),
@@ -4574,14 +4779,14 @@ async function handleCommunicationReleaseApproval(
     {
       item: communicationReleasePayload(created),
       queued: true,
-      providerNetworkIntent: false,
+      providerNetworkIntent: Boolean(input.live),
     },
     { status: 202 },
   );
 }
 
 function providerErrorCode(error) {
-  return String(error?.code || "GMAIL_DELIVERY_FAILED")
+  return String(error?.code || "EMAIL_DELIVERY_FAILED")
     .replace(/[^A-Z0-9_-]/gi, "_")
     .slice(0, 80);
 }
@@ -4590,9 +4795,7 @@ async function deliverApprovedCommunication(env, message) {
   if (
     !env.CALLBOARD_DB ||
     env.CALLBOARD_EMAIL_RELEASE_ENABLED !== "true" ||
-    !syntheticGmailConfigured({
-      credentialsJson: env.CALLBOARD_GMAIL_CREDENTIALS,
-    })
+    !transactionalEmailConfigured(env)
   )
     return { retry: true, delaySeconds: 60 };
   const body = message?.body;
@@ -4625,7 +4828,7 @@ async function deliverApprovedCommunication(env, message) {
         "UPDATE communication_release_approvals SET status = 'expired', active_slot = NULL, used_at = ?1, updated_at = ?1 WHERE id = ?2 AND status IN ('pending_enqueue', 'queued')",
       ).bind(timestamp, approval.id),
       env.CALLBOARD_DB.prepare(
-        "UPDATE communication_outbox SET status = 'prepared_preview', provider = 'none', last_error = 'EMAIL_RELEASE_EXPIRED', version = version + 1, updated_at = ?1 WHERE event_id = ?2 AND id = ?3 AND status = 'queued_for_test_delivery'",
+        "UPDATE communication_outbox SET status = CASE WHEN status = 'queued_for_delivery' THEN 'prepared_live' ELSE 'prepared_preview' END, provider = 'none', last_error = 'EMAIL_RELEASE_EXPIRED', version = version + 1, updated_at = ?1 WHERE event_id = ?2 AND id = ?3 AND status IN ('queued_for_test_delivery', 'queued_for_delivery')",
       ).bind(timestamp, body.eventId, body.outboxId),
     ]);
     return { final: true };
@@ -4649,7 +4852,7 @@ async function deliverApprovedCommunication(env, message) {
       .run();
     return { final: true };
   }
-  const validation = validateStoredCommunicationOutbox(outbox);
+  const validation = await validateStoredCommunicationOutbox(outbox, env, body.eventId);
   if (
     validation.error ||
     normalizeMailbox(validation.value.recipient.email) !==
@@ -4666,27 +4869,39 @@ async function deliverApprovedCommunication(env, message) {
   }
   const attemptNumber = Number(outbox.attempt_count || 0) + 1;
   const attemptId = id("communication_attempt");
+  const live = Boolean(validation.value.live);
+  const queuedStatus = live ? "queued_for_delivery" : "queued_for_test_delivery";
+  const dispatchingStatus = live ? "dispatching" : "dispatching_test";
+  const provider = live ? "ses" : "gmail";
   const [claimed] = await env.CALLBOARD_DB.batch([
     env.CALLBOARD_DB.prepare(
       "UPDATE communication_release_approvals SET status = 'dispatching', dispatch_started_at = ?1, updated_at = ?1 WHERE id = ?2 AND status = 'queued'",
     ).bind(timestamp, approval.id),
     env.CALLBOARD_DB.prepare(
-      "INSERT INTO communication_delivery_attempts (id, event_id, outbox_id, attempt_number, mode, status, provider, started_at, created_at) VALUES (?1, ?2, ?3, ?4, 'live_test', 'dispatching', 'gmail', ?5, ?5)",
-    ).bind(attemptId, body.eventId, body.outboxId, attemptNumber, timestamp),
+      "INSERT INTO communication_delivery_attempts (id, event_id, outbox_id, attempt_number, mode, status, provider, started_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 'dispatching', ?6, ?7, ?7)",
+    ).bind(attemptId, body.eventId, body.outboxId, attemptNumber, live ? "live" : "live_test", provider, timestamp),
     env.CALLBOARD_DB.prepare(
-      "UPDATE communication_outbox SET status = 'dispatching_test', provider = 'gmail', attempt_count = ?1, version = version + 1, updated_at = ?2 WHERE event_id = ?3 AND id = ?4 AND status = 'queued_for_test_delivery'",
-    ).bind(attemptNumber, timestamp, body.eventId, body.outboxId),
+      "UPDATE communication_outbox SET status = ?1, provider = ?2, attempt_count = ?3, version = version + 1, updated_at = ?4 WHERE event_id = ?5 AND id = ?6 AND status = ?7",
+    ).bind(dispatchingStatus, provider, attemptNumber, timestamp, body.eventId, body.outboxId, queuedStatus),
   ]);
   if (!claimed.meta?.changes) return { final: true };
 
   try {
-    const result = await sendSyntheticGmail({
-      credentialsJson: env.CALLBOARD_GMAIL_CREDENTIALS,
-      exactPayload: validation.value.exactPayload,
-      outboxId: outbox.id,
-      providerFetch: env.CALLBOARD_PROVIDER_FETCH || fetch,
-      sentAt: new Date(timestamp),
-    });
+    const result = live
+      ? await sendTransactionalEmail({
+          env,
+          exactPayload: validation.value.exactPayload,
+          idempotencyKey: outbox.id,
+          providerFetch: env.CALLBOARD_PROVIDER_FETCH || fetch,
+          sentAt: new Date(timestamp),
+        })
+      : await sendSyntheticGmail({
+          credentialsJson: env.CALLBOARD_GMAIL_CREDENTIALS,
+          exactPayload: validation.value.exactPayload,
+          outboxId: outbox.id,
+          providerFetch: env.CALLBOARD_PROVIDER_FETCH || fetch,
+          sentAt: new Date(timestamp),
+        });
     const finishedAt = now();
     await env.CALLBOARD_DB.batch([
       env.CALLBOARD_DB.prepare(
@@ -4696,8 +4911,8 @@ async function deliverApprovedCommunication(env, message) {
         "UPDATE communication_delivery_attempts SET status = 'succeeded', provider_message_id = ?1, finished_at = ?2 WHERE id = ?3 AND status = 'dispatching'",
       ).bind(result.messageId, finishedAt, attemptId),
       env.CALLBOARD_DB.prepare(
-        "UPDATE communication_outbox SET status = 'sent_test', provider_message_id = ?1, last_error = NULL, version = version + 1, updated_at = ?2 WHERE event_id = ?3 AND id = ?4 AND status = 'dispatching_test'",
-      ).bind(result.messageId, finishedAt, body.eventId, body.outboxId),
+        "UPDATE communication_outbox SET status = ?1, provider_message_id = ?2, last_error = NULL, version = version + 1, updated_at = ?3 WHERE event_id = ?4 AND id = ?5 AND status = ?6",
+      ).bind(live ? "sent" : "sent_test", result.messageId, finishedAt, body.eventId, body.outboxId, dispatchingStatus),
       env.CALLBOARD_DB.prepare(
         "UPDATE events SET updated_at = ?1 WHERE id = ?2",
       ).bind(finishedAt, body.eventId),
@@ -4714,8 +4929,8 @@ async function deliverApprovedCommunication(env, message) {
         "UPDATE communication_delivery_attempts SET status = 'failed', error_code = ?1, error_message = ?1, finished_at = ?2 WHERE id = ?3 AND status = 'dispatching'",
       ).bind(code, finishedAt, attemptId),
       env.CALLBOARD_DB.prepare(
-        "UPDATE communication_outbox SET status = 'failed_test', last_error = ?1, version = version + 1, updated_at = ?2 WHERE event_id = ?3 AND id = ?4 AND status = 'dispatching_test'",
-      ).bind(code, finishedAt, body.eventId, body.outboxId),
+        "UPDATE communication_outbox SET status = ?1, last_error = ?2, version = version + 1, updated_at = ?3 WHERE event_id = ?4 AND id = ?5 AND status = ?6",
+      ).bind(live ? "failed" : "failed_test", code, finishedAt, body.eventId, body.outboxId, dispatchingStatus),
       env.CALLBOARD_DB.prepare(
         "UPDATE events SET updated_at = ?1 WHERE id = ?2",
       ).bind(finishedAt, body.eventId),
@@ -5468,6 +5683,13 @@ function mapAirtableFields(source, mapping) {
   }));
 }
 
+function titleCaseStatus(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/(^|[\s_-])([a-z])/g, (_, prefix, letter) => `${prefix === "_" || prefix === "-" ? " " : prefix}${letter.toUpperCase()}`);
+}
+
 async function buildAirtablePlan(env, eventId, connection) {
   const [peopleResult, sessionsResult] = await Promise.all([
     env.CALLBOARD_DB.prepare("SELECT id, name, email, role, title, company, bio, headshot_url FROM people WHERE event_id = ?1 AND LOWER(role) = 'speaker' ORDER BY name, id").bind(eventId).all(),
@@ -5495,7 +5717,7 @@ async function buildAirtablePlan(env, eventId, connection) {
         fields: mapAirtableFields(source, speakerMapping),
       };
     }),
-    ...(sessionsResult.results || []).map((row) => ({ entityType: "session", localId: row.id, source: row, fields: mapAirtableFields({ callboardId: row.id, title: row.title, description: row.description || "", status: row.status, startsAt: row.starts_at || "", endsAt: row.ends_at || "", room: row.room || "", track: row.track || "" }, sessionMapping) })),
+    ...(sessionsResult.results || []).map((row) => ({ entityType: "session", localId: row.id, source: row, fields: mapAirtableFields({ callboardId: row.id, title: row.title, description: row.description || "", status: titleCaseStatus(row.status), startsAt: row.starts_at || "", endsAt: row.ends_at || "", room: row.room || "", track: row.track || "" }, sessionMapping) })),
   ];
   const operations = [];
   for (const item of sources) {

@@ -1,4 +1,4 @@
-import { sendSyntheticGmail, syntheticGmailConfigured } from "./gmail.js";
+import { buildMimeMessage, sendSyntheticGmail, syntheticGmailConfigured } from "./gmail.js";
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const SES_SERVICE = "ses";
@@ -47,6 +47,14 @@ function compactIdempotencyTag(value) {
     .slice(0, 256);
 }
 
+function bytesToBase64(value) {
+  const input = new TextEncoder().encode(String(value));
+  let binary = "";
+  for (let offset = 0; offset < input.length; offset += 0x8000)
+    binary += String.fromCharCode(...input.subarray(offset, offset + 0x8000));
+  return btoa(binary);
+}
+
 async function sendWithSes({ env, exactPayload, idempotencyKey, providerFetch, sentAt }) {
   const region = text(env.CALLBOARD_SES_REGION) || "us-east-1";
   const endpoint = new URL(`https://email.${region}.amazonaws.com/v2/email/outbound-emails`);
@@ -72,12 +80,14 @@ async function sendWithSes({ env, exactPayload, idempotencyKey, providerFetch, s
       : {}),
     Destination: { ToAddresses: recipients },
     ReplyToAddresses: [text(exactPayload?.replyTo?.email) || senderEmail],
-    Content: {
-      Simple: {
-        Subject: { Data: text(exactPayload?.subject), Charset: "UTF-8" },
-        Body: { Text: { Data: String(exactPayload?.text || ""), Charset: "UTF-8" } },
-      },
-    },
+    Content: exactPayload?.calendar
+      ? { Raw: { Data: bytesToBase64(buildMimeMessage(exactPayload, idempotencyKey, sentAt)) } }
+      : {
+          Simple: {
+            Subject: { Data: text(exactPayload?.subject), Charset: "UTF-8" },
+            Body: { Text: { Data: String(exactPayload?.text || ""), Charset: "UTF-8" } },
+          },
+        },
     ...(idempotencyKey
       ? {
           EmailTags: [

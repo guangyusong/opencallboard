@@ -163,7 +163,7 @@ test("health and bootstrap fail closed, then issue a server session", async (t) 
     persistence: "d1",
     writesEnabled: true,
     sessionAuthConfigured: true,
-    expectedSchemaVersion: 20,
+    expectedSchemaVersion: 21,
   });
 
   const denied = await worker.fetch(api("/api/bootstrap", {
@@ -1096,6 +1096,60 @@ test("scheduled reminder evaluation materializes shared previews once without pr
   assert.ok(runs.every((run) => run.outboxId && run.networkIntent === false));
 });
 
+test("scheduled reminder live delivery queues capped SES jobs only for event people", async (t) => {
+  const queue = new MemoryQueue();
+  const env = testEnv({
+    CALLBOARD_REMINDER_AUTOMATION_ENABLED: "true",
+    CALLBOARD_REMINDER_LIVE_DELIVERY_ENABLED: "true",
+    CALLBOARD_EMAIL_RELEASE_ENABLED: "true",
+    CALLBOARD_EMAIL_QUEUE: queue,
+    CALLBOARD_EMAIL_DAILY_CAP: "1",
+    CALLBOARD_AUTH_SENDER_EMAIL: "hello@opencallboard.com",
+    CALLBOARD_EMAIL_PROVIDER: "ses",
+    CALLBOARD_SES_REGION: "us-east-1",
+    CALLBOARD_SES_ACCESS_KEY_ID: "AKIATEST",
+    CALLBOARD_SES_SECRET_ACCESS_KEY: "ses-test-secret",
+    CALLBOARD_PUBLIC_ORIGIN: "https://app.opencallboard.com",
+  });
+  t.after(() => env.CALLBOARD_DB.close());
+  const organizer = await bootstrap(env);
+  await env.CALLBOARD_DB.prepare("UPDATE events SET starts_at = ?1 WHERE id = ?2")
+    .bind("2026-10-12T16:00:00.000Z", organizer.payload.eventId)
+    .run();
+
+  const member = await worker.fetch(api("/api/people", {
+    method: "POST",
+    headers: { cookie: organizer.cookie },
+    body: JSON.stringify({ name: "Event Speaker", email: "eventops-speaker-test@opencallboard.invalid", role: "Speaker" }),
+  }), env);
+  assert.equal(member.status, 201);
+  const person = (await body(member)).item;
+  const task = await worker.fetch(api("/api/tasks", {
+    method: "POST",
+    headers: { cookie: organizer.cookie },
+    body: JSON.stringify({ assigneePersonId: person.id, title: "Upload slides", status: "open", dueAt: "2026-10-10T16:00:00.000Z" }),
+  }), env);
+  assert.equal(task.status, 201);
+
+  const evaluatedAt = "2026-10-08T16:00:00.000Z";
+  const evaluation = await worker.scheduled({ scheduledTime: Date.parse(evaluatedAt) }, env);
+  assert.equal(evaluation.configured, true);
+  assert.equal(queue.messages.length, 1);
+  const outbox = env.CALLBOARD_DB.database.prepare("SELECT status, provider, exact_payload_json FROM communication_outbox").get();
+  assert.equal(outbox.status, "queued_for_delivery");
+  assert.equal(outbox.provider, "ses");
+  const exact = JSON.parse(outbox.exact_payload_json);
+  assert.equal(exact.to.length, 1);
+  assert.equal(exact.to[0].id, person.id);
+  assert.equal(exact.to[0].email, "eventops-speaker-test@opencallboard.invalid");
+  assert.equal(exact.from.email, "hello@opencallboard.com");
+  assert.equal(exact.deliveryMode, "live");
+  assert.equal(exact.networkIntent, true);
+  assert.match(exact.text, /https:\/\/app\.opencallboard\.com\/#\/speaker-portal/);
+  assert.equal(env.CALLBOARD_DB.database.prepare("SELECT COUNT(*) AS count FROM communication_outbox").get().count, 1);
+  assert.equal(env.CALLBOARD_DB.database.prepare("SELECT SUM(network_intent) AS total FROM communication_reminder_runs").get().total, 1);
+});
+
 test("one-time Gmail release queues and sends only the exact synthetic canary", async (t) => {
   const queue = new MemoryQueue();
   const providerCalls = [];
@@ -1225,6 +1279,78 @@ test("one-time Gmail release queues and sends only the exact synthetic canary", 
   await worker.queue({ messages: [{ ...queueMessage, ack: () => { acknowledged += 1; } }] }, env);
   assert.equal(providerCalls.length, 2);
   assert.equal(acknowledged, 2);
+});
+
+test("organizer can send one SES message only to a person in the event", async (t) => {
+  const queue = new MemoryQueue();
+  const providerCalls = [];
+  const env = testEnv({
+    CALLBOARD_EMAIL_RELEASE_ENABLED: "true",
+    CALLBOARD_EMAIL_UI_RELEASE_ENABLED: "true",
+    CALLBOARD_EMAIL_QUEUE: queue,
+    CALLBOARD_AUTH_SENDER_EMAIL: "hello@opencallboard.com",
+    CALLBOARD_SES_ACCESS_KEY_ID: "AKIATESTACCESSKEY",
+    CALLBOARD_SES_SECRET_ACCESS_KEY: "test-secret-access-key",
+    CALLBOARD_SES_REGION: "us-east-1",
+    CALLBOARD_EMAIL_DAILY_CAP: "5",
+    CALLBOARD_PROVIDER_FETCH: async (url, init) => {
+      providerCalls.push({ url: String(url), init });
+      return Response.json({ MessageId: "ses-event-message-1" });
+    },
+  });
+  t.after(() => env.CALLBOARD_DB.close());
+  const organizer = await bootstrap(env);
+  const createdPerson = await worker.fetch(api("/api/people", {
+    method: "POST", headers: { cookie: organizer.cookie },
+    body: JSON.stringify({ name: "Event Speaker", email: "speaker@example.test", role: "Speaker" }),
+  }), env);
+  const person = (await body(createdPerson)).item;
+  const exactPayload = {
+    schemaVersion: 1, releaseMode: "event-members", deliveryMode: "live", networkIntent: true,
+    action: "send",
+    from: { name: "AI Engineer", email: "hello@opencallboard.com" },
+    replyTo: { name: "AI Engineer", email: "hello@opencallboard.com" },
+    to: [{ id: person.id, role: person.role, name: person.name, email: person.email }],
+    subject: "Your proposal was accepted", text: "We are excited to welcome you.",
+    scheduledFor: null, attachments: [],
+    safety: { recipientAllowlistEnforced: true, outboundEnabled: true },
+  };
+  const outside = structuredClone(exactPayload);
+  outside.to[0] = { id: "outside", role: "Speaker", name: "Outside", email: "outside@example.test" };
+  const blocked = await worker.fetch(api("/api/communication-outbox", {
+    method: "POST", headers: { cookie: organizer.cookie },
+    body: JSON.stringify({ idempotencyKey: "outside-1", action: "send", templateName: "Acceptance", segment: "accepted-speakers", exactPayload: outside }),
+  }), env);
+  assert.equal(blocked.status, 403);
+  assert.equal((await body(blocked)).error, "RECIPIENT_NOT_EVENT_MEMBER");
+
+  const preparedResponse = await worker.fetch(api("/api/communication-outbox", {
+    method: "POST", headers: { cookie: organizer.cookie },
+    body: JSON.stringify({ idempotencyKey: "member-1", action: "send", templateName: "Acceptance", segment: "accepted-speakers", exactPayload }),
+  }), env);
+  assert.equal(preparedResponse.status, 201);
+  const prepared = (await body(preparedResponse)).item;
+  assert.equal(prepared.status, "prepared_live");
+  const releasedResponse = await worker.fetch(api(`/api/communication-outbox/${prepared.id}/release-approval`, {
+    method: "POST", headers: { cookie: organizer.cookie },
+    body: JSON.stringify({ confirm: "release-one-event-member-email-from-ui" }),
+  }), env);
+  assert.equal(releasedResponse.status, 202);
+  const released = await body(releasedResponse);
+  assert.equal(released.providerNetworkIntent, true);
+  assert.equal(released.item.recipientEmail, "speaker@example.test");
+  assert.equal(queue.messages.length, 1);
+
+  let acknowledged = 0;
+  await worker.queue({ messages: [{ body: queue.messages[0], ack: () => { acknowledged += 1; }, retry: () => {} }] }, env);
+  assert.equal(acknowledged, 1);
+  assert.equal(providerCalls.length, 1);
+  const providerPayload = JSON.parse(providerCalls[0].init.body);
+  assert.deepEqual(providerPayload.Destination.ToAddresses, ["speaker@example.test"]);
+  const delivered = await body(await worker.fetch(api(`/api/communication-outbox/${prepared.id}`, { headers: { cookie: organizer.cookie } }), env));
+  assert.equal(delivered.item.status, "sent");
+  assert.equal(delivered.item.provider, "ses");
+  assert.equal(delivered.item.providerMessageId, "ses-event-message-1");
 });
 
 test("one-time grants establish speaker and reviewer role boundaries", async (t) => {

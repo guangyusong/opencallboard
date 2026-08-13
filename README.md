@@ -30,9 +30,9 @@ published only after their visible data passes the same privacy scan as the sour
 - Lightweight CRM directory with lifecycle stages, notes, tags, segments, analytics,
   CSV import/deduplication, and add-to-event actions
 - CMS embed list, editor, live preview, and code-copy surface
-- Communications templates, fail-closed Gmail delivery to an explicitly configured
-  allowlist, RFC 5545 request/update/cancel attachments, downloadable `.ics`, and provider
-  links
+- Communications templates, event-member delivery through Amazon SES with an audited
+  D1/Queue outbox, RFC 5545 request/update/cancel attachments, downloadable `.ics`,
+  reminders, and provider links
 - One-way Accelevents field mapping, inspectable dry runs, idempotent local mock sync,
   and history
 - One-way Airtable export preview with field mapping, diffs, confirmation, idempotency,
@@ -74,11 +74,12 @@ The seeded routes include:
 
 ## Current safety boundary
 
-Organizer, reviewer, and speaker access is event-scoped. The checked-in identities use the
-reserved `.invalid` domain, so the default build cannot accidentally deliver mail. Real
-email, Accelevents, and Airtable writes, paid services, and general-purpose production
-identity remain disabled by default. The core workflow does not depend on an external
-integration. The `selfserve` Wrangler environment is a fail-closed template: operators
+Organizer, reviewer, and speaker access is event-scoped. The hosted self-serve environment
+can send only to people already present in the organizer's event, through a capped,
+approval-gated SES/Queue outbox; deployments remain fail-closed until their email flags and
+credentials are configured. Real Accelevents and Airtable provider writes remain separately
+gated, and the core workflow does not depend on either integration. The checked-in
+`selfserve` Wrangler environment contains placeholders and disabled release flags: operators
 must provision their own D1, R2, Queue, Turnstile widget, verified sender, and encrypted
 secrets before enabling writes or identity delivery.
 

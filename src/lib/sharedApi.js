@@ -624,6 +624,7 @@ export async function createSharedCommunicationOutbox(
 
 export async function releaseSharedCommunicationOutbox(
   outboxId,
+  { live = false } = {},
   fetchImpl = globalThis.fetch,
 ) {
   if (!fetchImpl || !outboxId)
@@ -638,7 +639,9 @@ export async function releaseSharedCommunicationOutbox(
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          confirm: "release-one-synthetic-email-from-ui",
+          confirm: live
+            ? "release-one-event-member-email-from-ui"
+            : "release-one-synthetic-email-from-ui",
         }),
       },
     );
@@ -957,6 +960,7 @@ export async function loadSharedWorkspace(fetchImpl = globalThis.fetch) {
       objectStorageAvailable: Boolean(health.objectStorageConfigured),
       emailDeliveryAvailable: Boolean(health.emailDeliveryConfigured),
       emailUiReleaseAvailable: Boolean(health.emailUiReleaseConfigured),
+      emailSender: String(health.emailSender || "").trim() || null,
       reminderAutomationAvailable: Boolean(health.reminderAutomationConfigured),
       portalPersonId: session.personId || null,
       ...(eventItem

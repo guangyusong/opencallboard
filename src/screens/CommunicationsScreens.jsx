@@ -349,6 +349,69 @@ export function CommunicationsScreen() {
         : `Exact payload prepared for ${releasePayload.to[0].email}; no email was transmitted.`,
     );
   };
+  const sendLive = async () => {
+    if (!previewPerson?.id || !previewPerson?.email || !renderedSubject.trim() || !renderedBody.trim()) {
+      showToast("Message not ready", "Choose an event member and complete the subject and message.");
+      return;
+    }
+    const confirmed = globalThis.confirm(
+      `Send this email${draft.attachCalendar ? " and calendar invitation" : ""} now to ${previewPerson.name} <${previewPerson.email}>?`,
+    );
+    if (!confirmed) return;
+    const livePayload = {
+      schemaVersion: 1,
+      releaseMode: "event-members",
+      deliveryMode: "live",
+      networkIntent: true,
+      action: "send",
+      from: { name: data.event?.name || "OpenCallboard", email: data.emailSender || "hello@opencallboard.com" },
+      replyTo: { name: data.event?.name || "OpenCallboard", email: data.emailSender || "hello@opencallboard.com" },
+      to: [{
+        id: previewPerson.id,
+        role: previewPerson.role || "Speaker",
+        name: previewPerson.name,
+        email: previewPerson.email,
+      }],
+      subject: renderedSubject,
+      text: renderedBody,
+      scheduledFor: null,
+      attachments: draft.attachCalendar
+        ? [{ kind: "calendar", filename: "opencallboard-session.ics", contentDisposition: "attachment", previewOnly: false }]
+        : [],
+      safety: { recipientAllowlistEnforced: true, outboundEnabled: true },
+      ...(draft.attachCalendar ? { calendar: calendarMetadata(calendarPayload) } : {}),
+    };
+    setSending(true);
+    const prepared = await createSharedCommunicationOutbox({
+      action: "send",
+      templateId: draft.id,
+      templateName: draft.name,
+      segment: draft.segment,
+      exactPayload: livePayload,
+    });
+    if (!prepared.ok) {
+      setSending(false);
+      showToast("Email not prepared", `The delivery safety gate rejected this message (${prepared.error}).`);
+      return;
+    }
+    const released = await releaseSharedCommunicationOutbox(prepared.item.id, { live: true });
+    setSending(false);
+    if (!released.ok) {
+      showToast("Email not queued", `The delivery gate rejected this send (${released.error}).`);
+      return;
+    }
+    const entry = {
+      ...prepared.item,
+      status: "Queued for delivery",
+      provider: "Amazon SES",
+      attachCalendar: Boolean(prepared.item.attachCalendar),
+    };
+    update((state) => ({ ...state, emailLog: [entry, ...(state.emailLog || [])] }));
+    showToast(
+      "Email queued",
+      `${previewPerson.name} will receive the message${draft.attachCalendar ? " with a calendar invitation" : ""}. Delivery status is recorded in the outbox.`,
+    );
+  };
   const addReminder = async () => {
     let item = {
       id: `reminder-${Date.now()}`,
@@ -804,7 +867,7 @@ export function CommunicationsScreen() {
                   <span className="comms-safe-note">
                     <Eye size={14} />
                     {data.emailUiReleaseAvailable
-                      ? "Gmail test gate ready"
+                      ? "Amazon SES delivery ready"
                       : "Preview outbox only"}
                   </span>
                   <span className="comms-spacer" />
@@ -829,11 +892,11 @@ export function CommunicationsScreen() {
                       disabled={
                         sending ||
                         !draft.subject ||
-                        releaseIdentityId !== "eventops-speaker-test"
+                        !previewPerson?.email
                       }
-                      onClick={() => runDry("send", true)}
+                      onClick={sendLive}
                     >
-                      {sending ? "Queueing…" : "Send test email"}
+                      {sending ? "Queueing…" : "Send email now"}
                     </Button>
                   ) : null}
                 </footer>

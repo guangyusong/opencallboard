@@ -48,6 +48,47 @@ test("SES transactional delivery signs the exact recipient and sender payload", 
   });
 });
 
+test("SES transactional delivery uses a raw MIME calendar invitation", async () => {
+  const calls = [];
+  const env = {
+    CALLBOARD_SES_ACCESS_KEY_ID: "AKIATESTACCESSKEY",
+    CALLBOARD_SES_SECRET_ACCESS_KEY: "test-secret-access-key",
+    CALLBOARD_SES_REGION: "us-east-1",
+    CALLBOARD_AUTH_SENDER_EMAIL: "hello@opencallboard.com",
+  };
+  await sendTransactionalEmail({
+    env,
+    sentAt: new Date("2026-08-13T12:34:56.000Z"),
+    idempotencyKey: "session_calendar_1",
+    exactPayload: {
+      from: { name: "OpenCallboard", email: "hello@opencallboard.com" },
+      replyTo: { name: "OpenCallboard", email: "hello@opencallboard.com" },
+      to: [{ name: "Test Speaker", email: "speaker@example.test" }],
+      subject: "Your session is scheduled",
+      text: "Your session is in Hall A.",
+      calendar: {
+        uid: "session-1@opencallboard.com", method: "REQUEST", sequence: 1,
+        start: "2026-10-12T16:00:00.000Z", end: "2026-10-12T17:00:00.000Z",
+        location: "Hall A",
+      },
+    },
+    providerFetch: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return Response.json({ MessageId: "ses-calendar-1" });
+    },
+  });
+  const payload = JSON.parse(calls[0].init.body);
+  assert.equal(Object.hasOwn(payload.Content, "Simple"), false);
+  const mime = Buffer.from(payload.Content.Raw.Data, "base64").toString("utf8");
+  assert.match(mime, /Content-Type: text\/calendar/);
+  assert.match(mime, /Message-ID: <session_calendar_1@opencallboard\.com>/);
+  assert.match(mime, /opencallboard-session\.ics/);
+  const calendarBase64 = mime.match(/filename="opencallboard-session\.ics"\r\n\r\n([A-Za-z0-9+/=\r\n]+)\r\n--callboard-/)?.[1] || "";
+  const calendar = Buffer.from(calendarBase64.replace(/\s/g, ""), "base64").toString("utf8");
+  assert.match(calendar, /PRODID:-\/\/OpenCallboard\/\/Event Program\/\/EN/);
+  assert.match(calendar, /LOCATION:Hall A/);
+});
+
 test("Resend transactional delivery preserves the exact recipient and idempotency boundary", async () => {
   const calls = [];
   const env = {

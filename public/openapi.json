@@ -2,13 +2,13 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OpenCallboard API",
-    "version": "0.18.0",
-    "description": "Event-scoped API for OpenCallboard. Browser sessions use a Secure HttpOnly cookie; API clients use expiring, event-scoped bearer tokens whose plaintext is returned once and whose explicit read/write scopes are enforced per route. Collection endpoints support stable keyset cursors. Lifecycle writes append webhook events, while signed delivery and retry records are strictly mock-only. Scheduled reminders can materialize durable zero-network preview records without sending them. Gmail delivery remains fail-closed unless its queue, encrypted credentials, enable flag, exact payload hash, one-time approval, and operator key all agree. Public CFP writes require idempotency keys; versioned mutations require If-Match. Email delivery, external webhooks, calendar-provider writes, real Accelevents transport, and unbound object storage are never represented as completed provider operations."
+    "version": "0.20.0",
+    "description": "Event-scoped OpenCallboard API. Browser sessions use a Secure HttpOnly cookie; API clients use expiring, event-scoped bearer tokens whose plaintext is returned once and whose explicit read/write scopes are enforced per route. Collection endpoints support stable keyset cursors. Public CFP writes require idempotency keys and versioned mutations require If-Match. Hosted deployments may enable an event-member-only SES/Queue delivery boundary with one-recipient approvals, daily caps, append-only attempts, and RFC 5545 calendar attachments. Scheduled reminders remain idempotent and are live only when their independent runtime flag is enabled. External webhooks remain mock-only and Accelevents/Airtable provider writes remain separately gated."
   },
   "servers": [
     {
-      "url": "https://opencallboard.com",
-      "description": "OpenCallboard hosted demo"
+      "url": "https://app.opencallboard.com",
+      "description": "Hosted self-serve application"
     }
   ],
   "tags": [
@@ -353,8 +353,8 @@
     "/api/communication-reminders/evaluate": {
       "post": {
         "tags": ["Communications"],
-        "summary": "Materialize currently due reminder previews",
-        "description": "Organizer-only and disabled unless reminder automation is explicitly enabled. Re-evaluates only the current event, persists idempotent scheduled_preview outbox rows plus durable zero-network run evidence, and never enqueues or sends a message.",
+        "summary": "Evaluate currently due reminders",
+        "description": "Organizer-only and disabled unless reminder automation is explicitly enabled. In preview deployments it persists idempotent scheduled_preview evidence. With the independent live-delivery flag, SES credentials, and Queue binding, it creates capped event-member outbox jobs instead.",
         "requestBody": {
           "required": true,
           "content": { "application/json": { "schema": { "type": "object", "required": ["confirm"], "properties": { "confirm": { "const": "materialize-due-reminder-previews" } } } } }
@@ -366,7 +366,7 @@
       "get": {
         "tags": ["Communications"],
         "summary": "Read durable scheduled-reminder evaluation evidence",
-        "description": "Organizer-only run ledger. Every record exposes networkIntent=false and links to a preview outbox row or an explicit no-recipient/template block reason.",
+        "description": "Organizer-only run ledger. Preview records expose networkIntent=false; live records identify their one-recipient SES outbox job and delivery status without exposing credentials.",
         "parameters": [{ "$ref": "#/components/parameters/Limit" }],
         "responses": { "200": { "$ref": "#/components/responses/ItemList" }, "403": { "$ref": "#/components/responses/Forbidden" } }
       }
@@ -375,8 +375,8 @@
       "get": { "$ref": "#/components/x-operations/ListCommunicationOutbox" },
       "post": {
         "tags": ["Communications"],
-        "summary": "Persist one allowlisted preview-only outbox record",
-        "description": "Requires deliveryMode=preview-only, networkIntent=false, the synthetic sender, and exactly one allowlisted synthetic recipient. No provider dispatch occurs.",
+        "summary": "Persist one inspected communication outbox record",
+        "description": "Accepts either the fixed synthetic preview contract or a live payload targeting exactly one person already present in the authenticated organizer's event. Live payloads must use the configured sender and explicit network-intent safety fields.",
         "requestBody": { "$ref": "#/components/requestBodies/JsonObject" },
         "responses": { "201": { "description": "Prepared preview and attempt zero" }, "200": { "description": "Idempotent replay" } }
       }
@@ -392,16 +392,16 @@
     "/api/communication-outbox/{id}/release-approval": {
       "post": {
         "tags": ["Communications"],
-        "summary": "Queue one exact synthetic Gmail canary behind a one-time approval",
-        "description": "Organizer browser session only; API tokens are forbidden. Requires the encrypted release key, enabled runtime, Queue binding, Gmail DWD secret, exact persisted payload SHA-256, and confirmation phrase. The approval token is hashed in D1 and sent only to the queue. This endpoint never calls Gmail directly.",
+        "summary": "Queue one exact inspected email behind a one-time approval",
+        "description": "Organizer browser session only; API tokens are forbidden. The recipient must be an event person, the runtime and Queue/provider must be enabled, the approval is hashed in D1, and the endpoint never calls the provider directly. Synthetic operator canaries retain their stricter key/hash boundary.",
         "security": [{ "sessionCookie": [] }],
         "parameters": [
           { "$ref": "#/components/parameters/Id" },
-          { "name": "X-Callboard-Email-Release-Key", "in": "header", "required": true, "schema": { "type": "string" }, "description": "Operator-supplied encrypted runtime secret; never stored in D1" }
+          { "name": "X-Callboard-Email-Release-Key", "in": "header", "required": false, "schema": { "type": "string" }, "description": "Required only for the legacy synthetic operator canary; never stored in D1" }
         ],
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "type": "object", "required": ["confirm", "exactPayloadHash"], "properties": { "confirm": { "const": "release-one-synthetic-email" }, "exactPayloadHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" } } } } }
+          "content": { "application/json": { "schema": { "type": "object", "required": ["confirm"], "properties": { "confirm": { "enum": ["release-one-event-member-email-from-ui", "release-one-synthetic-email", "release-one-synthetic-email-from-ui"] }, "exactPayloadHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" } } } } }
         },
         "responses": { "202": { "description": "One ten-minute synthetic release queued; no plaintext approval token returned" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "409": { "$ref": "#/components/responses/Conflict" }, "503": { "$ref": "#/components/responses/Unavailable" } }
       }
@@ -551,11 +551,11 @@
       "ListEmbeds": { "tags": ["Public"], "summary": "List organizer embed definitions", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
       "ListCommunicationTemplates": { "tags": ["Communications"], "summary": "List organizer templates", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
       "ListCommunicationReminders": { "tags": ["Communications"], "summary": "List organizer reminder definitions", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }], "responses": { "200": { "$ref": "#/components/responses/ItemList" } } },
-      "ListCommunicationOutbox": { "tags": ["Communications"], "summary": "List preview-only outbox records", "responses": { "200": { "$ref": "#/components/responses/ItemList" } } }
+      "ListCommunicationOutbox": { "tags": ["Communications"], "summary": "List communication outbox and delivery records", "responses": { "200": { "$ref": "#/components/responses/ItemList" } } }
     },
     "schemas": {
       "Error": { "type": "object", "required": ["error"], "properties": { "error": { "type": "string" }, "details": { "type": ["array", "object", "null"] } } },
-      "Health": { "type": "object", "required": ["ok", "service", "persistence", "writesEnabled", "expectedSchemaVersion"], "properties": { "ok": { "const": true }, "service": { "const": "callboard" }, "persistence": { "enum": ["d1", "localStorage"] }, "writesEnabled": { "type": "boolean" }, "sessionAuthConfigured": { "type": "boolean" }, "objectStorageConfigured": { "type": "boolean" }, "demoResetEnabled": { "type": "boolean" }, "emailDeliveryConfigured": { "type": "boolean" }, "reminderAutomationConfigured": { "type": "boolean" }, "expectedSchemaVersion": { "type": "integer" } } },
+      "Health": { "type": "object", "required": ["ok", "service", "persistence", "writesEnabled", "expectedSchemaVersion"], "properties": { "ok": { "const": true }, "service": { "const": "callboard" }, "persistence": { "enum": ["d1", "localStorage"] }, "writesEnabled": { "type": "boolean" }, "sessionAuthConfigured": { "type": "boolean" }, "objectStorageConfigured": { "type": "boolean" }, "demoResetEnabled": { "type": "boolean" }, "emailDeliveryConfigured": { "type": "boolean" }, "emailSender": { "type": ["string", "null"], "format": "email" }, "reminderAutomationConfigured": { "type": "boolean" }, "expectedSchemaVersion": { "type": "integer" } } },
       "Session": { "type": "object", "required": ["role", "eventId", "userId"], "properties": { "role": { "enum": ["organizer", "reviewer", "speaker"] }, "eventId": { "type": "string" }, "userId": { "type": "string" }, "personId": { "type": ["string", "null"] }, "email": { "type": "string", "format": "email" }, "expiresAt": { "type": "string", "format": "date-time" } } },
       "ApiToken": { "type": "object", "required": ["id", "name", "tokenPrefix", "scopes", "expiresAt", "createdAt"], "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "tokenPrefix": { "type": "string", "description": "Non-secret display prefix only" }, "scopes": { "type": "array", "items": { "type": "string" } }, "expiresAt": { "type": "string", "format": "date-time" }, "lastUsedAt": { "type": ["string", "null"], "format": "date-time" }, "revokedAt": { "type": ["string", "null"], "format": "date-time" }, "createdAt": { "type": "string", "format": "date-time" } } },
       "WebhookSubscription": { "type": "object", "required": ["id", "name", "targetUrl", "eventTypes", "enabled", "version", "createdAt", "updatedAt"], "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "targetUrl": { "type": "string", "format": "uri", "pattern": "^https://" }, "eventTypes": { "type": "array", "items": { "type": "string" } }, "enabled": { "type": "boolean" }, "secretVersion": { "type": "integer" }, "version": { "type": "integer" }, "createdAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" } } },
@@ -569,13 +569,13 @@
   },
   "security": [{ "sessionCookie": [] }, { "apiToken": [] }],
   "x-callboard-safety": {
-    "externalEmailDelivery": false,
+    "externalEmailDelivery": true,
     "emailReleaseRequiresOneTimeApproval": true,
-    "scheduledReminderDelivery": false,
+    "scheduledReminderDelivery": true,
     "externalWebhookDelivery": false,
     "calendarProviderWrites": false,
     "realAcceleventsTransport": false,
-    "objectStorageBound": false,
+    "objectStorageBound": true,
     "deletePropagationToAccelevents": false
   }
 }

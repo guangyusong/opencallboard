@@ -395,11 +395,11 @@ CREATE TABLE IF NOT EXISTS communication_reminder_runs (
   source_id TEXT,
   evaluated_at TEXT NOT NULL,
   due_at TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('materialized_preview', 'skipped_no_recipients', 'blocked_template')),
+  status TEXT NOT NULL CHECK(status IN ('materialized_preview', 'skipped_no_recipients', 'blocked_template', 'queued_live', 'failed_delivery', 'blocked_delivery')),
   matched_recipient_count INTEGER NOT NULL DEFAULT 0,
   outbox_id TEXT REFERENCES communication_outbox(id) ON DELETE SET NULL,
   error_code TEXT,
-  network_intent INTEGER NOT NULL DEFAULT 0 CHECK(network_intent = 0),
+  network_intent INTEGER NOT NULL DEFAULT 0 CHECK(network_intent IN (0, 1)),
   created_at TEXT NOT NULL,
   UNIQUE(event_id, automation_key)
 );
@@ -708,3 +708,6 @@ VALUES (19, 'speaker_professional_profile_fields', CURRENT_TIMESTAMP);
 
 INSERT OR IGNORE INTO schema_migrations (version, name, applied_at)
 VALUES (20, 'self_serve_organizer_accounts', CURRENT_TIMESTAMP);
+
+INSERT OR IGNORE INTO schema_migrations (version, name, applied_at)
+VALUES (21, 'live_reminder_delivery_runs', CURRENT_TIMESTAMP);

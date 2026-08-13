@@ -56,7 +56,7 @@ export function buildCalendarAttachment(exactPayload, sentAt = new Date()) {
   const status = method === "CANCEL" ? "CANCELLED" : "CONFIRMED";
   return [
     "BEGIN:VCALENDAR",
-    "PRODID:-//Callboard//Synthetic Test Delivery//EN",
+    "PRODID:-//OpenCallboard//Event Program//EN",
     "VERSION:2.0",
     "CALSCALE:GREGORIAN",
     `METHOD:${method}`,
@@ -78,17 +78,18 @@ export function buildCalendarAttachment(exactPayload, sentAt = new Date()) {
   ].join("\r\n");
 }
 
-export function buildSyntheticMimeMessage(exactPayload, outboxId, sentAt = new Date()) {
+export function buildMimeMessage(exactPayload, outboxId, sentAt = new Date()) {
   const safeId = String(outboxId || "message").replace(/[^a-zA-Z0-9_-]/g, "-");
   const boundary = `callboard-${safeId}`;
   const calendar = buildCalendarAttachment(exactPayload, sentAt);
+  const senderDomain = headerValue(exactPayload.from?.email).split("@")[1] || "opencallboard.com";
   const lines = [
     `From: ${mailboxHeader(exactPayload.from)}`,
     `Reply-To: ${mailboxHeader(exactPayload.replyTo)}`,
     `To: ${mailboxHeader(exactPayload.to[0])}`,
     `Subject: ${subjectHeader(exactPayload.subject)}`,
     `Date: ${sentAt.toUTCString()}`,
-    `Message-ID: <${safeId}@opencallboard.invalid>`,
+    `Message-ID: <${safeId}@${senderDomain}>`,
     "MIME-Version: 1.0",
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
     "",
@@ -102,13 +103,17 @@ export function buildSyntheticMimeMessage(exactPayload, outboxId, sentAt = new D
     `--${boundary}`,
     `Content-Type: text/calendar; charset=UTF-8; method=${exactPayload.calendar.method}`,
     "Content-Transfer-Encoding: base64",
-    'Content-Disposition: attachment; filename="callboard-test-session.ics"',
+    'Content-Disposition: attachment; filename="opencallboard-session.ics"',
     "",
     mimeBase64(calendar),
   );
   lines.push(`--${boundary}--`, "");
   return lines.join("\r\n");
 }
+
+// Preserve the public helper used by the synthetic Gmail tests while the
+// provider-neutral builder is shared by SES raw delivery.
+export const buildSyntheticMimeMessage = buildMimeMessage;
 
 function parseServiceAccount(value) {
   try {
@@ -244,7 +249,7 @@ export async function sendSyntheticGmail({ credentialsJson, exactPayload, outbox
   }
   const senderEmail = headerValue(exactPayload.from?.email).toLowerCase();
   const accessToken = await gmailAccessToken({ credentials, senderEmail, providerFetch, sentAt });
-  const mime = buildSyntheticMimeMessage(exactPayload, outboxId, sentAt);
+  const mime = buildMimeMessage(exactPayload, outboxId, sentAt);
   const sendResponse = await providerFetch(GMAIL_SEND_URI, {
     method: "POST",
     headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
