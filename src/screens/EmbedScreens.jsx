@@ -64,6 +64,25 @@ const blankEmbed = () => ({
   fields: { description: true, speakers: true, location: true },
 });
 
+const EMBED_FORMATS = [
+  ["Styled HTML", "Script snippet", "Responsive, branded widget with live interactions."],
+  ["Basic HTML", "Iframe snippet", "A plain iframe that works in any site builder."],
+  ["JSON", "Data feed", "Structured event, session, and speaker data."],
+  ["XML", "Data feed", "Portable XML for CMS and integration workflows."],
+  ["iCal", "Calendar feed", "A subscribable calendar feed for accepted sessions."],
+];
+
+function outputForEmbed(draft, publicUrl) {
+  const feedUrl = `${window.location.origin}/api/public/embeds/${encodeURIComponent(draft.id || "new")}`;
+  const targetId = `callboard-${String(draft.id || "new").replace(/[^a-z0-9_-]/gi, "-")}`;
+  if (draft.format === "Basic HTML")
+    return `<iframe\n  src="${publicUrl}"\n  title="${draft.name}"\n  width="100%"\n  height="720"\n  frameborder="0"\n></iframe>`;
+  if (draft.format === "JSON") return `${feedUrl}?format=json`;
+  if (draft.format === "XML") return `${feedUrl}?format=xml`;
+  if (draft.format === "iCal") return `${feedUrl}?format=ical`;
+  return `<div id="${targetId}"></div>\n<script>\n(() => {\n  const frame = document.createElement("iframe");\n  frame.src = "${publicUrl}";\n  frame.title = "${draft.name}";\n  frame.width = "100%";\n  frame.height = "720";\n  frame.frameBorder = "0";\n  document.getElementById("${targetId}").appendChild(frame);\n})();\n</script>`;
+}
+
 function normalizeEmbed(item = {}) {
   const type = String(item.type || "").toLowerCase();
   const layout = String(item.layout || "").toLowerCase();
@@ -134,8 +153,8 @@ export function EmbedsScreen() {
     enabled: embeds.filter((item) => item.enabled).length,
     disabled: embeds.filter((item) => !item.enabled).length,
   };
-  const snippet = `<iframe\n  src="${window.location.origin}/#/embed/${draft.id || "new"}"\n  title="${draft.name}"\n  width="100%"\n  height="720"\n  frameborder="0"\n></iframe>`;
   const publicUrl = `${window.location.origin}${window.location.pathname}#/embed/${draft.id || "new"}`;
+  const snippet = outputForEmbed(draft, publicUrl);
   const openPublicPreview = () => {
     if (draft.id) window.open(publicUrl, "_blank", "noopener,noreferrer");
   };
@@ -253,7 +272,7 @@ export function EmbedsScreen() {
                 <Code2 size={18} />
                 Get Code
               </button>
-              <span className="embed-format-label">Styled HTML</span>
+              <span className="embed-format-label">{draft.format}</span>
             </div>
           </header>
           <div className="embed-editor-body">
@@ -286,19 +305,26 @@ export function EmbedsScreen() {
                       </label>
                     </div>
                     <section className="embed-format-card">
-                      <h3>
-                        Embed Styled HTML{" "}
-                        <span className="embed-lock">Locked</span>
-                      </h3>
-                      <p>
-                        Configure settings for styled HTML feeds including
-                        Agenda, Session List, Schedule Itinerary, Speaker List,
-                        and Speaker Gallery. Each embed can be placed directly
-                        in your website and will auto-update with speaker and
-                        session details.
-                      </p>
+                      <h3>Output format</h3>
+                      <label className="embed-field">
+                        Format
+                        <select
+                          aria-label="Output format"
+                          value={draft.format}
+                          onChange={(event) =>
+                            setDraft({ ...draft, format: event.target.value })
+                          }
+                        >
+                          {EMBED_FORMATS.map(([name]) => (
+                            <option key={name}>{name}</option>
+                          ))}
+                        </select>
+                      </label>
                       <p style={{ marginTop: 12 }}>
-                        Create a new embed to use a different format.
+                        {EMBED_FORMATS.find(([name]) => name === draft.format)?.[2]}
+                      </p>
+                      <p style={{ marginTop: 8 }}>
+                        {EMBED_FORMATS.map(([name, kind]) => `${name} (${kind})`).join(" · ")}
                       </p>
                     </section>
                   </>
@@ -474,10 +500,11 @@ export function EmbedsScreen() {
                   </>
                 ) : (
                   <div className="embed-code-panel">
-                    <h3>Embed code</h3>
+                    <h3>{draft.format === "JSON" || draft.format === "XML" || draft.format === "iCal" ? "Feed URL" : "Embed code"}</h3>
                     <p>
-                      Paste this code into your website where the live Callboard
-                      feed should appear.
+                      {draft.format === "JSON" || draft.format === "XML" || draft.format === "iCal"
+                        ? "Use this public feed URL in your CMS, calendar, or integration."
+                        : "Paste this code into your website where the live Callboard feed should appear."}
                     </p>
                     <pre>{snippet}</pre>
                     <button onClick={copyCode}>
@@ -570,7 +597,7 @@ export function EmbedsScreen() {
         <section>
           <header className="embed-group-head">
             <Code2 size={18} />
-            <b>Styled HTML</b>
+            <b>Embeds and feeds</b>
             <span>{visible.length}</span>
             <ChevronDown size={17} />
           </header>
@@ -1016,6 +1043,11 @@ function EmbedPreview({ draft, device, data }) {
       .toLowerCase()
       .includes(query.trim().toLowerCase()),
   );
+  const visibleResultCount = view.includes("Speaker")
+    ? speakerMatches.length
+    : view === "Agenda" || view === "Schedule Itinerary"
+      ? activeGroup?.sessions.length || 0
+      : sessions.length;
   const toggleFavorite = (id) =>
     setFavorites((current) =>
       current.includes(id)
@@ -1090,13 +1122,7 @@ function EmbedPreview({ draft, device, data }) {
         </>
       ) : null}
       <span className="embed-result-count">
-        {view.includes("Speaker") ? speakerMatches.length : sessions.length}{" "}
-        result
-        {(view.includes("Speaker")
-          ? speakerMatches.length
-          : sessions.length) === 1
-          ? ""
-          : "s"}
+        {visibleResultCount} result{visibleResultCount === 1 ? "" : "s"}
       </span>
     </div>
   );
@@ -1123,9 +1149,9 @@ function EmbedPreview({ draft, device, data }) {
             <p className="embed-session-description">
               {isExpanded
                 ? session.description
-                : `${session.description.slice(0, 160)}${session.description.length > 160 ? "…" : ""}`}
+                : `${session.description.slice(0, 90)}${session.description.length > 90 ? "…" : ""}`}
             </p>
-            {session.description.length > 160 ? (
+            {session.description.length > 90 ? (
               <button onClick={() => toggleExpanded(session.id)}>
                 {isExpanded ? "Show less" : "Show more"}
               </button>
@@ -1247,7 +1273,10 @@ function EmbedPreview({ draft, device, data }) {
             }
           >
             {activeGroup.label}
-            <span>{activeGroup.sessions.length} sessions</span>
+            <span>
+              {activeGroup.sessions.length} session
+              {activeGroup.sessions.length === 1 ? "" : "s"}
+            </span>
           </h2>
           <div className="embed-agenda-grid" style={{ "--agenda-columns": agendaRooms.length }}>
             <div className="embed-agenda-grid-head" aria-hidden="true">

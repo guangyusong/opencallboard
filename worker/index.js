@@ -3264,7 +3264,7 @@ async function handlePublicEmbed(request, env, embedId) {
       });
     }
   const embed = decodeRow(row, RESOURCE_SPECS.embeds);
-  return json({
+  const payload = {
     embed: {
       ...(embed.config || {}),
       id: embed.id,
@@ -3307,7 +3307,65 @@ async function handlePublicEmbed(request, env, embedId) {
       participantIds: session.participantIds || [],
     })),
     participants: [...personMap.values()],
-  });
+  };
+  const requestedFormat = new URL(request.url).searchParams.get("format")?.toLowerCase();
+  if (requestedFormat === "xml") {
+    const xmlEscape = (value) =>
+      String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&apos;");
+    const sessionsXml = payload.sessions
+      .map(
+        (session) =>
+          `<session id="${xmlEscape(session.id)}"><title>${xmlEscape(session.title)}</title><description>${xmlEscape(session.description)}</description><startsAt>${xmlEscape(session.startsAt)}</startsAt><endsAt>${xmlEscape(session.endsAt)}</endsAt><room>${xmlEscape(session.room)}</room><track>${xmlEscape(session.track)}</track><format>${xmlEscape(session.format)}</format></session>`,
+      )
+      .join("");
+    const speakersXml = payload.participants
+      .map(
+        (person) =>
+          `<speaker id="${xmlEscape(person.id)}"><name>${xmlEscape(person.name)}</name><title>${xmlEscape(person.title)}</title><company>${xmlEscape(person.company)}</company><bio>${xmlEscape(person.bio)}</bio></speaker>`,
+      )
+      .join("");
+    return new Response(
+      `<?xml version="1.0" encoding="UTF-8"?><callboard><event id="${xmlEscape(payload.event.id)}"><name>${xmlEscape(payload.event.name)}</name><timezone>${xmlEscape(payload.event.timezone)}</timezone></event><sessions>${sessionsXml}</sessions><speakers>${speakersXml}</speakers></callboard>`,
+      { headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=60" } },
+    );
+  }
+  if (requestedFormat === "ical" || requestedFormat === "ics") {
+    const icsEscape = (value) =>
+      String(value ?? "")
+        .replaceAll("\\", "\\\\")
+        .replaceAll(";", "\\;")
+        .replaceAll(",", "\\,")
+        .replaceAll(/\r?\n/g, "\\n");
+    const icsDate = (value) =>
+      new Date(value).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+    const events = payload.sessions
+      .filter((session) => session.startsAt && session.endsAt)
+      .map(
+        (session) =>
+          [
+            "BEGIN:VEVENT",
+            `UID:${icsEscape(session.id)}@opencallboard.com`,
+            `DTSTAMP:${icsDate(new Date().toISOString())}`,
+            `DTSTART:${icsDate(session.startsAt)}`,
+            `DTEND:${icsDate(session.endsAt)}`,
+            `SUMMARY:${icsEscape(session.title)}`,
+            `DESCRIPTION:${icsEscape(session.description)}`,
+            `LOCATION:${icsEscape(session.room)}`,
+            "END:VEVENT",
+          ].join("\r\n"),
+      )
+      .join("\r\n");
+    return new Response(
+      ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//OpenCallboard//Public Program//EN", `X-WR-CALNAME:${icsEscape(payload.event.name)}`, events, "END:VCALENDAR", ""].join("\r\n"),
+      { headers: { "content-type": "text/calendar; charset=utf-8", "content-disposition": `inline; filename="${embedId}.ics"`, "cache-control": "public, max-age=60" } },
+    );
+  }
+  return json(payload, { headers: { "cache-control": "public, max-age=60" } });
 }
 
 async function handlePublicEmbedHeadshot(request, env, embedId, fileId) {

@@ -284,7 +284,7 @@ export function LandingScreen() {
       <footer className="landing-footer">
         <Brand />
         <p>Program operations for teams who would rather run the event.</p>
-        <div><a href="#/submit/form_callboard_judge_cfp">Call for papers</a><a href="#/embed/embed_callboard_judge_itinerary">Schedule</a><a href="#/embed/embed_callboard_judge_gallery">Speakers</a><a href={createEventUrl}>Create event</a></div>
+        <div><a href="#/submit/form_callboard_judge_cfp">Call for papers</a><a href="#/embed/embed_callboard_judge_sessions">Sessions</a><a href="#/embed/embed_callboard_judge_agenda">Agenda</a><a href="#/embed/embed_callboard_judge_itinerary">Itinerary</a><a href="#/embed/embed_callboard_judge_speaker_list">Speaker list</a><a href="#/embed/embed_callboard_judge_gallery">Speaker gallery</a><a href={createEventUrl}>Create event</a></div>
       </footer>
 
       {videoOpen && (
