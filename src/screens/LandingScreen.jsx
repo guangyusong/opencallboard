@@ -203,7 +203,7 @@ export function LandingScreen() {
             <span>{active.number} / 05</span>
             <h3>{active.title}</h3>
             <p>{active.body}</p>
-            <a href={active.key === "collect" ? "#/submit/form_callboard_judge_cfp" : active.key === "publish" ? "#/schedule" : "#/organizer-login"}>
+            <a href={active.key === "collect" ? "#/submit/form_callboard_judge_cfp" : active.key === "publish" ? "#/embed/embed_callboard_judge_itinerary" : "#/organizer-login"}>
               Try this workflow <ArrowRight size={16} />
             </a>
           </div>
@@ -283,7 +283,7 @@ export function LandingScreen() {
       <footer className="landing-footer">
         <Brand />
         <p>Program operations for teams who would rather run the event.</p>
-        <div><a href="#/submit/form_callboard_judge_cfp">Call for papers</a><a href="#/schedule">Schedule</a><a href="#/speakers">Speakers</a></div>
+        <div><a href="#/submit/form_callboard_judge_cfp">Call for papers</a><a href="#/embed/embed_callboard_judge_itinerary">Schedule</a><a href="#/embed/embed_callboard_judge_gallery">Speakers</a></div>
       </footer>
 
       {videoOpen && (

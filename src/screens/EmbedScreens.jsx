@@ -45,8 +45,11 @@ const EMBED_STYLES = `
 .embed-subbar{display:none}.embed-content{min-height:calc(100% - 124px)}.embed-agenda{gap:28px}.embed-day-group{display:grid;gap:10px}.embed-day-heading{margin:0;padding:0 2px 9px;border-bottom:1px solid #344154;color:#f5f8fd;font-size:15px;font-weight:650}.embed-day-heading span{margin-left:8px;color:#8294ac;font-size:11px;font-weight:500}.embed-day-sessions{display:grid;gap:10px}.embed-agenda-row{grid-template-columns:100px minmax(0,1fr)}.embed-agenda-row time{font-weight:600}.embed-agenda-row p+p{margin-top:4px}.embed-tba{padding-top:4px}.embed-tba .embed-day-heading{color:#aab7c9}.embed-speaker-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.embed-speaker-card{min-width:0;padding:18px;align-items:flex-start;gap:14px}.embed-speaker-avatar{width:54px;height:54px;flex:0 0 54px;color:#dce5f1;font-size:13px;font-weight:700;overflow:hidden}.embed-speaker-avatar img{width:100%;height:100%;display:block;object-fit:cover}.embed-speaker-copy{min-width:0}.embed-speaker-copy h3{margin:1px 0 6px;color:inherit;font-size:15px}.embed-speaker-copy>p{margin:0 0 10px;color:#91a0b4;font-size:12px;line-height:1.45}.embed-speaker-sessions{margin:0;padding:0;list-style:none;display:grid;gap:7px}.embed-speaker-sessions li{display:grid;gap:2px;font-size:11px}.embed-speaker-sessions b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#dce5f1}.embed-speaker-sessions span{color:#8294ac}
 .embed-speaker-sessions b{color:inherit}.embed-canvas.light .embed-speaker-copy>p{color:#657286}.embed-canvas.light .embed-speaker-sessions span{color:#718096}
 .embed-public-tools{display:flex;align-items:center;gap:9px;margin-bottom:16px;flex-wrap:wrap}.embed-public-tools label{height:38px;min-width:190px;border:1px solid #344154;border-radius:7px;background:#172236;display:flex;align-items:center;gap:8px;padding:0 11px}.embed-public-tools input,.embed-public-tools select{min-width:0;flex:1;border:0;outline:0;background:transparent;color:inherit;font:inherit}.embed-public-tools select option{color:#172033}.embed-public-tools button{height:38px;border:1px solid #344154;border-radius:7px;background:#172236;color:inherit;padding:0 12px;display:flex;align-items:center;gap:7px;cursor:pointer}.embed-public-tools button.active{border-color:#6f91ff;background:#26375a}.embed-result-count{margin-left:auto;color:#91a0b4;font-size:11px}.embed-session-list{display:grid;gap:12px}.embed-session-card{border:1px solid #344154;border-radius:9px;background:#172236;padding:17px}.embed-session-card header{display:flex;align-items:flex-start;gap:12px}.embed-session-card h3{margin:0 0 5px;font-size:16px}.embed-session-card header button{margin-left:auto;border:0;background:transparent;color:#88aaff;cursor:pointer}.embed-session-meta,.embed-tags,.embed-person-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:#91a0b4;font-size:11px}.embed-tags{margin-top:10px}.embed-tags span{padding:4px 7px;border-radius:999px;background:#26354d;color:#b9c8dc}.embed-session-description{margin:11px 0;color:#b5c0cf;font-size:12px;line-height:1.55}.embed-session-card>button{border:0;background:transparent;color:#88aaff;padding:0;cursor:pointer}.embed-session-action{margin-top:12px!important;display:flex;align-items:center;gap:6px}.embed-session-action.selected{color:#ffd36b}.embed-day-tabs{display:flex;gap:7px;margin-bottom:15px;overflow:auto}.embed-day-tabs button{border:1px solid #344154;border-radius:7px;background:#172236;color:#b9c5d6;padding:8px 11px;white-space:nowrap;cursor:pointer}.embed-day-tabs button.active{border-color:#6f91ff;background:#26375a;color:#fff}.embed-clickable{cursor:pointer}.embed-clickable:hover{border-color:#6782ae}.embed-detail-back{margin-bottom:15px;border:0;background:transparent;color:#88aaff;display:flex;align-items:center;gap:7px;cursor:pointer}.embed-detail{border:1px solid #344154;border-radius:10px;background:#172236;padding:22px}.embed-detail header{display:flex;align-items:flex-start;gap:14px}.embed-detail h2{margin:0 0 7px;font-size:22px}.embed-detail p{color:#aab6c7;line-height:1.6}.embed-detail .embed-speaker-avatar{width:72px;height:72px;flex-basis:72px}.embed-empty-filter{padding:42px;border:1px dashed #344154;border-radius:9px;text-align:center;color:#91a0b4}.embed-canvas.light .embed-public-tools label,.embed-canvas.light .embed-public-tools button,.embed-canvas.light .embed-day-tabs button,.embed-canvas.light .embed-session-card,.embed-canvas.light .embed-detail{background:#fff;border-color:#dce3ec}.embed-canvas.light .embed-tags span{background:#eef2f7;color:#526077}.embed-canvas.light .embed-session-description,.embed-canvas.light .embed-detail p{color:#526077}.embed-speaker-card button{border:0;background:transparent;color:inherit;text-align:left;padding:0;cursor:pointer}.embed-speaker-card .embed-card-open{margin-left:auto;color:#88aaff}.embed-gallery-tools{margin-bottom:16px}.embed-agenda-row button{all:unset;cursor:pointer;display:block}.embed-agenda-row button:focus-visible,.embed-speaker-card button:focus-visible{outline:2px solid #6f91ff;outline-offset:3px}
+.embed-agenda-grid{border:1px solid #344154;border-radius:10px;overflow:hidden}.embed-agenda-grid-head,.embed-agenda-slot{display:grid;grid-template-columns:88px repeat(var(--agenda-columns),minmax(0,1fr))}.embed-agenda-grid-head{background:#202c40;color:#aebbd0;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.embed-agenda-grid-head>*{padding:11px 12px;border-right:1px solid #344154}.embed-agenda-slot{border-top:1px solid #344154;min-height:104px}.embed-agenda-slot>time{padding:14px 12px;color:#85a7d2;font-size:12px;font-weight:700;border-right:1px solid #344154}.embed-agenda-cell{padding:8px;border-right:1px solid #344154}.embed-agenda-cell:last-child,.embed-agenda-grid-head>*:last-child{border-right:0}.embed-agenda-block{width:100%;height:100%;min-height:84px;border:1px solid #40516b;border-left:3px solid #6f91ff;border-radius:7px;background:#172236;color:inherit;padding:11px;text-align:left;cursor:pointer}.embed-agenda-block:hover{border-color:#7892bd}.embed-agenda-block h4{margin:0 0 8px;font-size:13px;line-height:1.35}.embed-agenda-block p{margin:0;color:#91a0b4;font-size:10px;line-height:1.45}.embed-agenda-block p+p{margin-top:3px}.embed-canvas.light .embed-agenda-grid,.embed-canvas.light .embed-agenda-grid-head>* ,.embed-canvas.light .embed-agenda-slot,.embed-canvas.light .embed-agenda-slot>time,.embed-canvas.light .embed-agenda-cell{border-color:#dce3ec}.embed-canvas.light .embed-agenda-grid-head{background:#eef2f7;color:#526077}.embed-canvas.light .embed-agenda-block{background:#fff;border-color:#dce3ec;border-left-color:#4d6cf0}.embed-canvas.light .embed-agenda-block p{color:#657286}
+.embed-speaker-grid.gallery{grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.embed-speaker-card.gallery{position:relative;display:block;padding:0;overflow:hidden}.embed-speaker-card.gallery .embed-speaker-avatar{width:100%;height:210px;border-radius:0;display:grid;place-items:center;font-size:30px}.embed-speaker-card.gallery>button{display:block;width:100%;padding:17px 18px 19px}.embed-speaker-card.gallery .embed-card-open{position:absolute;right:14px;bottom:18px}.embed-speaker-card.gallery .embed-session-meta{padding-right:28px}.embed-bio-toggle{border:0;background:transparent;color:#88aaff;padding:0;cursor:pointer}.embed-canvas.light .embed-bio-toggle{color:#315ed8}
 @media(max-width:1100px){.embed-editor-bar,.embed-editor-body{grid-template-columns:380px minmax(0,1fr)}.embed-grid{grid-template-columns:repeat(2,minmax(250px,1fr))}.embed-browser-toolbar{grid-template-columns:auto 1fr auto auto}.embed-browser-toolbar .embed-device-toggle{display:none}}
 @media(max-width:760px){.embed-page{padding:22px 16px 40px}.embed-toolbar{align-items:stretch;flex-direction:column}.embed-toolbar .search-box{width:100%}.embed-toolbar .split-wrap{margin-left:0}.embed-grid{grid-template-columns:1fr}.embed-editor-bar{display:flex}.embed-editor-name{width:100%;border-right:0}.embed-editor-tools{position:absolute;top:80px;left:0;right:0;height:55px;background:#fff;border-bottom:1px solid #dfe4ec;z-index:2}.embed-editor-body{display:block;padding-top:55px}.embed-config{border-right:0}.embed-preview-wrap{padding:14px}.embed-browser{height:680px;min-height:0}.embed-browser-toolbar{grid-template-columns:auto 1fr auto}.embed-preview-actions .embed-icon-button{display:none}.embed-urlbar{grid-column:1/-1}.embed-grid{padding-top:14px}.embed-event-title{min-height:70px;padding:21px 18px;font-size:21px}.embed-content{padding:18px 14px;min-height:calc(100% - 110px)}.embed-agenda{gap:24px}.embed-agenda-row{grid-template-columns:72px minmax(0,1fr);gap:11px;padding:14px 12px}.embed-day-heading{font-size:14px}.embed-speaker-grid{grid-template-columns:1fr}.embed-speaker-card{padding:15px}.embed-speaker-sessions b{white-space:normal}.embed-powered{padding-inline:14px}.embed-public-tools label{min-width:100%;width:100%}.embed-result-count{margin-left:0;width:100%}.embed-session-card header{display:block}.embed-session-card header button{margin-top:8px}.embed-detail h2{font-size:18px}}
+@media(max-width:760px){.embed-speaker-grid.gallery{grid-template-columns:1fr}.embed-speaker-card.gallery{padding:0}.embed-speaker-card.gallery .embed-speaker-avatar{height:190px}.embed-agenda-grid{border:0;overflow:visible}.embed-agenda-grid-head{display:none}.embed-agenda-slot{display:block;border:0;min-height:0;margin-bottom:18px}.embed-agenda-slot>time{display:block;padding:0 0 8px;border:0}.embed-agenda-cell{padding:0 0 8px;border:0}.embed-agenda-cell:empty{display:none}.embed-agenda-block{min-height:0}}
 `;
 
 const blankEmbed = () => ({
@@ -834,6 +837,17 @@ function formatEventRange(session, timezone) {
   return `${day}, ${time.format(start)}${end && Number.isFinite(end.getTime()) ? `–${time.format(end)}` : ""}`;
 }
 
+function publicSessionFormat(session, timezone) {
+  if (session?.format) return session.format;
+  const start = scheduledAt(session, timezone);
+  const end = eventDate(session?.endsAt || session?.end, timezone);
+  if (!start || !end || !Number.isFinite(end.getTime())) return "Program session";
+  const minutes = Math.max(1, Math.round((end.getTime() - start.getTime()) / 60000));
+  if (minutes <= 15) return `Lightning talk (${minutes} min)`;
+  if (minutes >= 60) return `Workshop (${minutes} min)`;
+  return `Talk (${minutes} min)`;
+}
+
 function speakerSortKey(person) {
   const parts = String(person?.name || "")
     .trim()
@@ -936,6 +950,7 @@ function EmbedPreview({ draft, device, data }) {
   const [expanded, setExpanded] = useState([]);
   const [selectedSession, setSelectedSession] = useState(null);
   const [selectedSpeaker, setSelectedSpeaker] = useState(null);
+  const [speakerBioExpanded, setSpeakerBioExpanded] = useState(false);
   const [selectedDay, setSelectedDay] = useState("");
   const [showMine, setShowMine] = useState(false);
   const [exported, setExported] = useState(false);
@@ -965,7 +980,7 @@ function EmbedPreview({ draft, device, data }) {
       session.title,
       session.description,
       session.track,
-      session.format,
+      publicSessionFormat(session, timezone),
       session.room,
       ...peopleFor(session).map((person) => person.name),
     ]
@@ -976,7 +991,7 @@ function EmbedPreview({ draft, device, data }) {
       (!query.trim() ||
         searchText(session).includes(query.trim().toLowerCase())) &&
       (track === "All tracks" || session.track === track) &&
-      (format === "All formats" || session.format === format) &&
+      (format === "All formats" || publicSessionFormat(session, timezone) === format) &&
       (room === "All rooms" || session.room === room) &&
       (!showMine || favorites.includes(session.id)),
   );
@@ -990,7 +1005,7 @@ function EmbedPreview({ draft, device, data }) {
     ...new Set(baseSessions.map((session) => session.track).filter(Boolean)),
   ].sort();
   const formats = [
-    ...new Set(baseSessions.map((session) => session.format).filter(Boolean)),
+    ...new Set(baseSessions.map((session) => publicSessionFormat(session, timezone))),
   ].sort();
   const rooms = [
     ...new Set(baseSessions.map((session) => session.room).filter(Boolean)),
@@ -1129,7 +1144,7 @@ function EmbedPreview({ draft, device, data }) {
           </div>
         ) : null}
         <div className="embed-tags">
-          {session.format ? <span>{session.format}</span> : null}
+          <span>{publicSessionFormat(session, timezone)}</span>
           {session.track ? <span>{session.track}</span> : null}
         </div>
         {itinerary ? (
@@ -1171,9 +1186,7 @@ function EmbedPreview({ draft, device, data }) {
         </header>
         <p>{selectedSession.description || "No description provided."}</p>
         <div className="embed-tags">
-          {selectedSession.format ? (
-            <span>{selectedSession.format}</span>
-          ) : null}
+          <span>{publicSessionFormat(selectedSession, timezone)}</span>
           {selectedSession.track ? <span>{selectedSession.track}</span> : null}
         </div>
         {peopleFor(selectedSession).length ? (
@@ -1215,6 +1228,12 @@ function EmbedPreview({ draft, device, data }) {
       ))}
     </div>
   ) : null;
+  const agendaRooms = activeGroup
+    ? [...new Set(activeGroup.sessions.map(({ session }) => session.room || "Room TBA"))].sort()
+    : [];
+  const agendaTimes = activeGroup
+    ? [...new Map(activeGroup.sessions.map(({ startsAt }) => [startsAt.getTime(), startsAt])).values()]
+    : [];
   const agenda = baseSessions.length ? (
     <>
       {filters}
@@ -1230,22 +1249,33 @@ function EmbedPreview({ draft, device, data }) {
             {activeGroup.label}
             <span>{activeGroup.sessions.length} sessions</span>
           </h2>
-          <div className="embed-day-sessions">
-            {activeGroup.sessions.map(({ session, startsAt }) => (
-              <article
-                className="embed-agenda-row embed-clickable"
-                key={session.id}
-                onClick={() => setSelectedSession(session)}
-              >
-                <time dateTime={startsAt.toISOString()}>
-                  {formatEventTime(startsAt, timezone)}
-                </time>
-                <button>
-                  <h4>{session.title}</h4>
-                  <p>{session.track || session.format || "Program session"}</p>
-                  {session.room ? <p>{session.room}</p> : null}
-                </button>
-              </article>
+          <div className="embed-agenda-grid" style={{ "--agenda-columns": agendaRooms.length }}>
+            <div className="embed-agenda-grid-head" aria-hidden="true">
+              <span>Time</span>
+              {agendaRooms.map((agendaRoom) => <span key={agendaRoom}>{agendaRoom}</span>)}
+            </div>
+            {agendaTimes.map((startsAt) => (
+              <div className="embed-agenda-slot" key={startsAt.getTime()}>
+                <time dateTime={startsAt.toISOString()}>{formatEventTime(startsAt, timezone)}</time>
+                {agendaRooms.map((agendaRoom) => (
+                  <div className="embed-agenda-cell" key={agendaRoom}>
+                    {activeGroup.sessions
+                      .filter((item) => item.startsAt.getTime() === startsAt.getTime() && (item.session.room || "Room TBA") === agendaRoom)
+                      .map(({ session }) => (
+                        <button
+                          className="embed-agenda-block"
+                          key={session.id}
+                          aria-label={`View ${session.title} in ${agendaRoom}`}
+                          onClick={() => setSelectedSession(session)}
+                        >
+                          <h4>{session.title}</h4>
+                          <p>{publicSessionFormat(session, timezone)}</p>
+                          <p>{session.track || "General program"}</p>
+                        </button>
+                      ))}
+                  </div>
+                ))}
+              </div>
             ))}
           </div>
         </section>
@@ -1342,7 +1372,7 @@ function EmbedPreview({ draft, device, data }) {
           <>
             <button
               className="embed-detail-back"
-              onClick={() => setSelectedSpeaker(null)}
+              onClick={() => { setSelectedSpeaker(null); setSpeakerBioExpanded(false); }}
             >
               <ArrowLeft size={16} />
               Back to {view}
@@ -1360,7 +1390,18 @@ function EmbedPreview({ draft, device, data }) {
                   </div>
                 </div>
               </header>
-              <p>{selectedSpeaker.bio || "Biography coming soon."}</p>
+              <p>
+                {selectedSpeaker.bio
+                  ? speakerBioExpanded || selectedSpeaker.bio.length <= 220
+                    ? selectedSpeaker.bio
+                    : `${selectedSpeaker.bio.slice(0, 220)}…`
+                  : "Biography coming soon."}
+              </p>
+              {selectedSpeaker.bio?.length > 220 ? (
+                <button className="embed-bio-toggle" onClick={() => setSpeakerBioExpanded((value) => !value)}>
+                  {speakerBioExpanded ? "Show less biography" : "Show full biography"}
+                </button>
+              ) : null}
               <h3>Sessions ({appearances.length})</h3>
               <div className="embed-session-list">
                 {appearances.map((session) => (
@@ -1388,7 +1429,7 @@ function EmbedPreview({ draft, device, data }) {
   const speakerDirectory = (
     <>
       {filters}
-      <div className="embed-speaker-grid">
+      <div className={`embed-speaker-grid ${view === "Speaker Gallery" ? "gallery" : ""}`}>
         {speakerMatches.length ? (
           speakerMatches.map((person) => {
             const appearances = baseSessions.filter((session) =>
@@ -1396,9 +1437,9 @@ function EmbedPreview({ draft, device, data }) {
             );
             return (
               <article
-                className="embed-speaker-card embed-clickable"
+                className={`embed-speaker-card embed-clickable ${view === "Speaker Gallery" ? "gallery" : ""}`}
                 key={person.id}
-                onClick={() => setSelectedSpeaker(person)}
+                onClick={() => { setSelectedSpeaker(person); setSpeakerBioExpanded(false); }}
               >
                 <PublicSpeakerAvatar person={person} />
                 <button>
@@ -1480,6 +1521,14 @@ export function PublicEmbedScreen({ route }) {
   const { data } = useAppStore();
   const id = route.split("/")[2];
   const aliases = {
+    embed_callboard_judge_schedule: [
+      "embed_callboard_judge_schedule",
+      "Schedule Itinerary",
+    ],
+    embed_callboard_judge_speakers: [
+      "embed_callboard_judge_speakers",
+      "Speaker Gallery",
+    ],
     embed_callboard_judge_sessions: [
       "embed_callboard_judge_schedule",
       "Session List",
@@ -1563,6 +1612,11 @@ export function PublicEmbedScreen({ route }) {
           <div>
             <CalendarDays size={35} />
             <p>This embed is not available.</p>
+            <p>
+              <a href="#/embed/embed_callboard_judge_itinerary">Open the public schedule</a>
+              {" · "}
+              <a href="#/embed/embed_callboard_judge_gallery">Open the speaker gallery</a>
+            </p>
           </div>
         </div>
       </div>
