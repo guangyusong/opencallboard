@@ -104,6 +104,7 @@ export function LandingScreen() {
   const closeButtonRef = useRef(null);
   const active = workflow.find((item) => item.key === activeKey) || workflow[0];
   const createEventUrl = "https://app.opencallboard.com/#/organizer-login";
+  const judgeDemoUrl = "#/organizer-login";
 
   useEffect(() => {
     if (!videoOpen) return undefined;
@@ -138,7 +139,7 @@ export function LandingScreen() {
           <button type="button" onClick={() => scrollToSection("workflow")}>Workflow</button>
           <button type="button" onClick={() => scrollToSection("open-source")}>Open source</button>
           <button type="button" className="landing-nav-video" onClick={() => { setVideoOpen(true); closeMobile(); }}>Watch demo</button>
-          <a className="landing-nav-cta" href={createEventUrl} onClick={closeMobile}>Create event <ArrowRight size={15} /></a>
+          <a className="landing-nav-cta" href={judgeDemoUrl} onClick={closeMobile}>Organizer demo <ArrowRight size={15} /></a>
         </nav>
       </header>
 
@@ -148,10 +149,10 @@ export function LandingScreen() {
           <h1 id="landing-title">Run the program.<br />Not the paperwork.</h1>
           <p>OpenCallboard gives event teams one shared workflow for proposals, reviewer decisions, speaker onboarding, agenda production, and a published program—without enterprise bloat.</p>
           <div className="landing-actions">
-            <a className="landing-button primary" href={createEventUrl}>Create your event <ArrowRight size={17} /></a>
+            <a className="landing-button primary" href={judgeDemoUrl}>Open organizer demo <ArrowRight size={17} /></a>
             <button className="landing-button secondary" type="button" onClick={() => setVideoOpen(true)}><Play size={16} fill="currentColor" /> Watch walkthrough</button>
           </div>
-          <div className="landing-hero-note"><Check size={15} /> No attendee registration. No per-event pricing. Built for the program team.</div>
+          <div className="landing-hero-note"><Check size={15} /> No attendee registration. No per-event pricing. <a href={createEventUrl}>Create your own workspace.</a></div>
         </div>
         <div className="landing-hero-visual" aria-label="OpenCallboard product preview">
           <div className="landing-shot landing-shot-main">
@@ -276,14 +277,14 @@ export function LandingScreen() {
         </ol>
         <div className="landing-demo-actions">
           <a className="landing-button inverse" href="#/submit/form_callboard_judge_cfp">Start with the CFP <ArrowRight size={17} /></a>
-          <a className="landing-button ghost" href={createEventUrl}>Create your event</a>
+          <a className="landing-button ghost" href={judgeDemoUrl}>Open organizer demo</a>
         </div>
       </section>
 
       <footer className="landing-footer">
         <Brand />
         <p>Program operations for teams who would rather run the event.</p>
-        <div><a href="#/submit/form_callboard_judge_cfp">Call for papers</a><a href="#/embed/embed_callboard_judge_itinerary">Schedule</a><a href="#/embed/embed_callboard_judge_gallery">Speakers</a></div>
+        <div><a href="#/submit/form_callboard_judge_cfp">Call for papers</a><a href="#/embed/embed_callboard_judge_itinerary">Schedule</a><a href="#/embed/embed_callboard_judge_gallery">Speakers</a><a href={createEventUrl}>Create event</a></div>
       </footer>
 
       {videoOpen && (
