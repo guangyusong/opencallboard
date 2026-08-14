@@ -1392,12 +1392,12 @@ function EmbedPreview({ draft, device, data }) {
               </header>
               <p>
                 {selectedSpeaker.bio
-                  ? speakerBioExpanded || selectedSpeaker.bio.length <= 220
+                  ? speakerBioExpanded || selectedSpeaker.bio.length <= 120
                     ? selectedSpeaker.bio
-                    : `${selectedSpeaker.bio.slice(0, 220)}…`
+                    : `${selectedSpeaker.bio.slice(0, 120)}…`
                   : "Biography coming soon."}
               </p>
-              {selectedSpeaker.bio?.length > 220 ? (
+              {selectedSpeaker.bio?.length > 120 ? (
                 <button className="embed-bio-toggle" onClick={() => setSpeakerBioExpanded((value) => !value)}>
                   {speakerBioExpanded ? "Show less biography" : "Show full biography"}
                 </button>
